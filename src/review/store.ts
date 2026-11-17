@@ -274,6 +274,15 @@ export class ReviewStore implements vscode.Disposable {
     }
   }
 
+  closeIfEmpty(runId: RunId): boolean {
+    const run = this.runs.get(runId);
+    if (!run || !run.active || run.order.length > 0) {
+      return false;
+    }
+    this.invalidateRun(runId);
+    return true;
+  }
+
   requestCancel(runId: RunId): void {
     const run = this.runs.get(runId);
     if (!run || !run.active) {

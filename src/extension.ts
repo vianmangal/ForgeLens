@@ -91,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext) {
     panel.open();
     return harness.startRun(name, instruction, selection);
   };
+  const review = activateReview(context);
   panel = new AgentPanel(context.extensionUri, {
     run: instruction => {
       const name = model();
@@ -99,7 +100,6 @@ export async function activate(context: vscode.ExtensionContext) {
     },
     cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id) });
-  const review = activateReview(context);
   context.subscriptions.push(review.connectHarness({
     startRun: (instruction, selection) => startRun(model(), instruction, selection),
     approve, reject, cancel, onState: changes.event, onDelta: deltas.event, onApproval: approvals.event,

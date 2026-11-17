@@ -180,3 +180,17 @@ test("runs keep their instruction and labels use the first 50 characters", () =>
   assert.equal(store.getRun(run.runId).instruction, instruction);
   assert.equal(store.createRun("agent", "x", "run-k").instruction, undefined);
 });
+
+test("closeIfEmpty closes a finished run with no changes and leaves others alone", () => {
+  const store = new ReviewStore();
+  const empty = store.createRun("agent", "t", "run-l");
+  const full = store.createRun("agent", "t", "run-m");
+  twoHunks(store, full.runId, "file:///g.py");
+  assert.equal(store.closeIfEmpty(full.runId), false);
+  assert.equal(store.getRun(full.runId).active, true);
+  assert.equal(store.closeIfEmpty(empty.runId), true);
+  assert.equal(store.getRun(empty.runId).active, false);
+  assert.equal(store.closeIfEmpty(empty.runId), false);
+  assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-m"]);
+  assert.equal(store.closeIfEmpty("missing"), false);
+});

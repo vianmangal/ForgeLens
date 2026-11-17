@@ -151,7 +151,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     }
   };
 
-  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  const statusBar = vscode.window.createStatusBarItem("forgelens.review.status", vscode.StatusBarAlignment.Left, 100);
+  statusBar.name = "ForgeLens Review";
 
   const refreshStatus = () => {
     const run = store.latestActiveRun();
@@ -174,6 +175,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   const markRunFinished = (runId: RunId) => {
     finished.add(runId);
     store.clearBulkChoice(runId);
+    store.closeIfEmpty(runId);
     refreshStatus();
     void maybePromptApply(runId);
   };
@@ -199,9 +201,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     const allow = decision === "accepted";
     if (link && harnessRuns.has(runId)) {
       store.setBulkChoice(runId, decision);
-      for (const id of store.pendingHunkIds(runId, "approval_requested")) {
-        submit(id, allow);
-      }
+      const sent = store.pendingHunkIds(runId, "approval_requested").filter((id) => submit(id, allow)).length;
+      const verb = allow ? "accepted" : "rejected";
+      vscode.window.showInformationMessage(`ForgeLens: ${sent} change(s) sent as ${verb}. Changes this run proposes later will be ${verb} automatically.`);
       return;
     }
     store.decideAll(runId, decision, allow ? undefined : REJECT_REASON);
