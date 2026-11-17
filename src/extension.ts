@@ -5,6 +5,7 @@ import { Harness, type Failure, type Selection } from "./trueforge/harness";
 import { type RunState } from "./shared/types";
 import { listenProof, ProofFixture, proofInstruction, proofSpec } from "./proof/connector";
 import { AgentPanel } from "./ui/panel";
+import { activateReview } from "./review";
 
 let active: Harness | undefined;
 let listener: ReturnType<typeof listenProof> | undefined;
@@ -91,6 +92,12 @@ export async function activate(context: vscode.ExtensionContext) {
   };
   panel = new AgentPanel(context.extensionUri, { run: instruction => startRun(model(), instruction), cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id) });
+  const review = activateReview(context);
+  context.subscriptions.push(review.connectHarness({
+    startRun: (instruction, selection) => startRun(model(), instruction, selection),
+    approve, reject, cancel, onState: changes.event, onDelta: deltas.event, onApproval: approvals.event,
+    onDecision: decisions.event, onInvalidate: invalidations.event, onRunFailed
+  }));
   const startConnector = async () => {
     const port = config().get<number>("proofPort", 8792);
     if (!listener) listener = listenProof(port, () => fixture);
@@ -140,7 +147,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(panel);
   return { startRun, approve, reject, registerProposed, cancel, onRunFailed, onState: changes.event,
     onDelta: deltas.event, onApproval: approvals.event, onDecision: decisions.event, onInvalidate: invalidations.event,
-    isActive: (runId: string) => active?.isActive(runId) ?? false, getState: () => active?.state };
+    isActive: (runId: string) => active?.isActive(runId) ?? false, getState: () => active?.state, review };
 }
 
 export async function deactivate() {

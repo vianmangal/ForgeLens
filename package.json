@@ -41,6 +41,52 @@
       {
         "command": "forgelens.cancel",
         "title": "ForgeLens: Cancel Run"
+      },
+      {
+        "command": "forgelens.editSelection",
+        "title": "ForgeLens: Edit Selection"
+      },
+      {
+        "command": "forgelens.acceptHunk",
+        "title": "ForgeLens: Accept Change",
+        "icon": "$(check)"
+      },
+      {
+        "command": "forgelens.rejectHunk",
+        "title": "ForgeLens: Reject Change",
+        "icon": "$(close)"
+      },
+      {
+        "command": "forgelens.openHunkDiff",
+        "title": "ForgeLens: Open Diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "forgelens.applyAccepted",
+        "title": "ForgeLens: Apply Accepted Changes",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "forgelens.cancelRun",
+        "title": "ForgeLens: Cancel Review",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "forgelens.undoLastApply",
+        "title": "ForgeLens: Undo Last Apply",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "forgelens.dev.fakeProposal",
+        "title": "ForgeLens (Dev): Fake Proposal From Selection"
+      },
+      {
+        "command": "forgelens.dev.clipboardProposal",
+        "title": "ForgeLens (Dev): Proposal From Clipboard"
+      },
+      {
+        "command": "forgelens.dev.fakeMultiFileProposal",
+        "title": "ForgeLens (Dev): Fake Multi-File Proposal"
       }
     ],
     "configuration": {
@@ -64,13 +110,80 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Loopback port for the isolated Person 1 proof connector."
+        },
+        "forgelens.review.autoOpenDiff": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open the diff automatically when the first change for a file arrives."
         }
       }
+    },
+    "keybindings": [
+      {
+        "command": "forgelens.editSelection",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorTextFocus"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "forgelens.review",
+          "name": "ForgeLens Review"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "forgelens.acceptHunk",
+          "when": "view == forgelens.review && viewItem == hunk-pending",
+          "group": "inline@1"
+        },
+        {
+          "command": "forgelens.rejectHunk",
+          "when": "view == forgelens.review && viewItem == hunk-pending",
+          "group": "inline@2"
+        },
+        {
+          "command": "forgelens.applyAccepted",
+          "when": "view == forgelens.review && viewItem == run-active",
+          "group": "inline@1"
+        },
+        {
+          "command": "forgelens.cancelRun",
+          "when": "view == forgelens.review && viewItem == run-active",
+          "group": "inline@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "forgelens.undoLastApply",
+          "when": "view == forgelens.review",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "forgelens.acceptHunk",
+          "when": "false"
+        },
+        {
+          "command": "forgelens.rejectHunk",
+          "when": "false"
+        },
+        {
+          "command": "forgelens.openHunkDiff",
+          "when": "false"
+        }
+      ]
     }
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "@truefoundry/trueforge-sdk": "0.185.0",
+    "diff": "8.0.4",
     "zod": "4.6.7"
   },
   "devDependencies": {
