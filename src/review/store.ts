@@ -15,6 +15,7 @@ export interface RunReview {
   instruction?: string;
   bulk?: Decision;
   active: boolean;
+  finished: boolean;
   reverted: boolean;
   order: HunkId[];
   baseByUri: Map<string, string>;
@@ -89,7 +90,7 @@ export class ReviewStore implements vscode.Disposable {
   }
 
   createRun(kind: "inline" | "agent", label: string, runId: RunId = newRunId(), instruction?: string): RunReview {
-    const run: RunReview = { runId, kind, label, instruction, active: true, reverted: false, order: [], baseByUri: new Map() };
+    const run: RunReview = { runId, kind, label, instruction, active: true, finished: false, reverted: false, order: [], baseByUri: new Map() };
     this.runs.set(runId, run);
     this.changeEmitter.fire(runId);
     return run;
@@ -159,7 +160,15 @@ export class ReviewStore implements vscode.Disposable {
   }
 
   isConflicted(runId: RunId, uri: vscode.Uri): boolean {
-    return this.conflicted.has(`${runId}|${uri.toString()}`);
+    return !!this.runs.get(runId)?.active && this.conflicted.has(`${runId}|${uri.toString()}`);
+  }
+
+  private clearConflicts(runId: RunId): void {
+    for (const flag of [...this.conflicted]) {
+      if (flag.startsWith(`${runId}|`)) {
+        this.conflicted.delete(flag);
+      }
+    }
   }
 
   propose(runId: RunId, snapshotId: string, request: ProposalRequest): ProposeResult {
@@ -274,6 +283,13 @@ export class ReviewStore implements vscode.Disposable {
     }
   }
 
+  markFinished(runId: RunId): void {
+    const run = this.runs.get(runId);
+    if (run) {
+      run.finished = true;
+    }
+  }
+
   closeIfEmpty(runId: RunId): boolean {
     const run = this.runs.get(runId);
     if (!run || !run.active || run.order.length > 0) {
@@ -283,13 +299,14 @@ export class ReviewStore implements vscode.Disposable {
     return true;
   }
 
-  requestCancel(runId: RunId): void {
+  requestCancel(runId: RunId): boolean {
     const run = this.runs.get(runId);
     if (!run || !run.active) {
-      return;
+      return false;
     }
     this.invalidateRun(runId);
     this.cancelEmitter.fire(runId);
+    return true;
   }
 
   invalidateRun(runId: RunId): void {
@@ -299,6 +316,7 @@ export class ReviewStore implements vscode.Disposable {
     }
     run.active = false;
     run.bulk = undefined;
+    this.clearConflicts(runId);
     for (const hunk of this.hunksOfRun(runId)) {
       this.queued.delete(hunk.id);
       if (hunk.status !== "applied") {
@@ -326,6 +344,7 @@ export class ReviewStore implements vscode.Disposable {
     }
     run.active = false;
     run.bulk = undefined;
+    this.clearConflicts(runId);
     this.changeEmitter.fire(runId);
   }
 

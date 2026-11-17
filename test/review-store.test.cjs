@@ -194,3 +194,29 @@ test("closeIfEmpty closes a finished run with no changes and leaves others alone
   assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-m"]);
   assert.equal(store.closeIfEmpty("missing"), false);
 });
+
+test("conflict flags only apply to active runs and are cleared when a run is applied or invalidated", () => {
+  const store = new ReviewStore();
+  const applied = store.createRun("agent", "t", "run-n");
+  const dropped = store.createRun("agent", "t", "run-o");
+  const [h1] = twoHunks(store, applied.runId, "file:///h.py");
+  twoHunks(store, dropped.runId, "file:///h.py");
+  store.refreshConflicts(doc("file:///h.py", "changed\n" + text, 2));
+  assert.equal(store.isConflicted(applied.runId, Uri.parse("file:///h.py")), true);
+  assert.equal(store.isConflicted(dropped.runId, Uri.parse("file:///h.py")), true);
+  store.markApplied(applied.runId, [h1]);
+  store.invalidateRun(dropped.runId);
+  assert.equal(store.isConflicted(applied.runId, Uri.parse("file:///h.py")), false);
+  assert.equal(store.isConflicted(dropped.runId, Uri.parse("file:///h.py")), false);
+});
+
+test("requestCancel reports whether it cancelled anything and markFinished sets the flag", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-p");
+  assert.equal(store.getRun(run.runId).finished, false);
+  store.markFinished(run.runId);
+  assert.equal(store.getRun(run.runId).finished, true);
+  assert.equal(store.requestCancel(run.runId), true);
+  assert.equal(store.requestCancel(run.runId), false);
+  assert.equal(store.requestCancel("missing"), false);
+});

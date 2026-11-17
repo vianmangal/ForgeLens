@@ -51,6 +51,15 @@ function hunkIdOf(arg: unknown): HunkId | undefined {
   return node && node.type === "hunk" ? node.hunkId : undefined;
 }
 
+export function fakeEditText(text: string): string {
+  const lines = text.replace(/\r?\n$/, "").split(/\r?\n/);
+  const indent = (lines[1] ?? lines[0]).match(/^\s*/)?.[0] ?? "";
+  const next = [...lines];
+  next.splice(1, 0, `${indent}FORGELENS_DEMO_INSERTED_LINE`);
+  next[next.length - 1] = `${next[next.length - 1]} FORGELENS_DEMO_EDIT`;
+  return next.join("\n");
+}
+
 function currentSelection(): LineSelection | undefined {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
@@ -77,7 +86,6 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   const decorations = new HunkDecorations(store);
   const baseDocs = new ReviewDocuments(store, BASE_SCHEME);
   const proposedDocs = new ReviewDocuments(store, PROPOSED_SCHEME);
-  const finished = new Set<RunId>();
   const diffOpened = new Set<RunId>();
   const prompted = new Set<RunId>();
   const harnessRuns = new Set<RunId>();
@@ -129,7 +137,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
 
   const maybePromptApply = async (runId: RunId) => {
     const run = store.getRun(runId);
-    if (!run || !run.active || !finished.has(runId) || prompted.has(runId)) {
+    if (!run || !run.active || !run.finished || prompted.has(runId)) {
       return;
     }
     const hunks = store.hunksOfRun(runId);
@@ -163,7 +171,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     const hunks = store.hunksOfRun(run.runId);
     const accepted = hunks.filter((h) => h.status === "accepted").length;
     const rejected = hunks.filter((h) => h.status === "rejected").length;
-    const canApply = finished.has(run.runId) && accepted > 0;
+    const canApply = run.finished && accepted > 0;
     statusBar.text = `ForgeLens: ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected${canApply ? " · Apply" : ""}`;
     statusBar.tooltip = run.instruction ?? run.label;
     statusBar.command = canApply
@@ -173,7 +181,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   };
 
   const markRunFinished = (runId: RunId) => {
-    finished.add(runId);
+    store.markFinished(runId);
     store.clearBulkChoice(runId);
     store.closeIfEmpty(runId);
     refreshStatus();
@@ -404,8 +412,10 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     vscode.commands.registerCommand("forgelens.cancelRun", async (arg: unknown) => {
       const runId = await pickRun(arg);
       if (runId) {
-        await store.serialize(async () => store.requestCancel(runId));
-        vscode.window.showInformationMessage("ForgeLens: run cancelled. No files were changed by it.");
+        const cancelled = await store.serialize(async () => store.requestCancel(runId));
+        vscode.window.showInformationMessage(cancelled
+          ? "ForgeLens: run cancelled. No files were changed by it."
+          : "ForgeLens: this run had already finished or been applied, so there was nothing to cancel.");
       }
     }),
     vscode.commands.registerCommand("forgelens.undoLastApply", async () => {
@@ -417,13 +427,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
         return;
       }
       runLocal(`Dev: fake change ${vscode.workspace.asRelativePath(target.document.uri, false)}`, (runId) => {
-        const lines = target.text.replace(/\n$/, "").split("\n");
-        const indent = (lines[1] ?? lines[0]).match(/^\s*/)?.[0] ?? "";
-        const next = [...lines];
-        next.splice(1, 0, `${indent}FORGELENS_DEMO_INSERTED_LINE`);
-        next[next.length - 1] = `${next[next.length - 1]} FORGELENS_DEMO_EDIT`;
         const snapshot = store.captureSnapshot(target.document);
-        const result = store.propose(runId, snapshot.snapshotId, { kind: "range", startLine: target.startLine, endLine: target.endLine, newText: next.join("\n") });
+        const result = store.propose(runId, snapshot.snapshotId, { kind: "range", startLine: target.startLine, endLine: target.endLine, newText: fakeEditText(target.text) });
         if (!result.ok) {
           throw new Error(result.error);
         }

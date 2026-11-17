@@ -74,3 +74,13 @@ test("mapped start lines and same-point inserts", () => {
   const b = { startLine: 2, endLine: 1, oldText: "", newText: "y\n" };
   assert.ok(hunksOverlap("a\nb\n", a, b));
 });
+
+test("inserting after the last line of a file without a final newline starts a new line", () => {
+  const lf = buildProposal("a\nb", { kind: "range", startLine: 3, endLine: 2, newText: "x\n" }, []);
+  assert.equal(lf.ok, true);
+  assert.equal(applyHunks("a\nb", lf.hunks), "a\nb\nx\n");
+  const crlf = buildProposal("a\r\nb", { kind: "range", startLine: 3, endLine: 2, newText: "x" }, []);
+  assert.equal(applyHunks("a\r\nb", crlf.hunks), "a\r\nb\r\nx");
+  assert.equal(applyHunks("a\nb\n", buildProposal("a\nb\n", { kind: "range", startLine: 3, endLine: 2, newText: "x\n" }, []).hunks), "a\nb\nx\n");
+  assert.equal(buildProposal("a\nb", { kind: "range", startLine: 3, endLine: 2, newText: "" }, []).ok, false);
+});

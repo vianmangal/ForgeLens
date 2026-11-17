@@ -18,7 +18,7 @@
 - **Run list.** Runs with no changes that are no longer active are hidden. A run that finishes without proposing any change is closed, so it disappears. An active run with no changes yet shows "working…".
 - **Original instruction.** The run tooltip shows the instruction. The run label is its first 50 characters. Inline edits store what you typed. Agent-panel runs get theirs through `review.expectRun({kind, label, instruction})`, which `src/extension.ts` calls just before `startRun`.
 - **Apply prompt.** When the run reaches `ready_to_apply` and every change is decided, ForgeLens offers to apply the accepted changes.
-- **Apply** writes every accepted change in one `WorkspaceEdit`, after checking that each file still matches its snapshot. On a mismatch, nothing is written and the file is named.
+- **Apply** writes every accepted change in one `WorkspaceEdit`, after checking that each file still matches its snapshot. On a mismatch, nothing is written and the file is named. Apply waits until the run has finished, and nothing is written if the run is cancelled or invalidated while Apply is in progress.
 - **Undo:** `Ctrl+Z`, or **ForgeLens: Undo Last Apply**.
 - **Cancel or invalidation:** `onInvalidate`, panel Cancel and **ForgeLens: Cancel Review** all invalidate pending changes. They can't be decided or applied afterwards.
 - **Dev commands** that work without TrueForge, for rehearsal: **Proposal From Clipboard**, **Fake Proposal From Selection**, **Fake Multi-File Proposal**.
@@ -41,7 +41,7 @@ The extension's exported API now includes `review`.
 
 ## Checks
 
-`npm test` runs the harness tests plus `test/review-hunks.test.cjs` and `test/review-store.test.cjs`.
+`npm test` runs the harness tests plus `test/review-hunks.test.cjs`, `test/review-store.test.cjs` and `test/review-apply.test.cjs`.
 
 **By hand:** `npm run build`, then F5. In the development window:
 

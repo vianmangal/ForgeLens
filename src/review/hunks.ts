@@ -188,10 +188,15 @@ export function buildProposal(base: string, request: ProposalRequest, existing: 
     if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 1 || endLine < startLine - 1 || endLine > total) {
       return { ok: false, error: `Invalid line range ${startLine}-${endLine}; the file has ${total} lines` };
     }
+    segmentNew = normalizeEol(request.newText, eol);
+    if (startLine === total + 1 && total > 0 && segmentNew.length > 0 && !base.endsWith("\n")) {
+      startLine = total;
+      endLine = total;
+      segmentNew = base.slice(offsetOfLine(offsets, base, total)) + eol + segmentNew;
+    }
     const segStart = offsetOfLine(offsets, base, startLine);
     const segEnd = offsetOfLine(offsets, base, endLine + 1);
     const segmentOld = base.slice(segStart, segEnd);
-    segmentNew = normalizeEol(request.newText, eol);
     if (segmentOld.endsWith(eol) && segmentNew.length > 0 && !segmentNew.endsWith(eol)) {
       segmentNew += eol;
     }

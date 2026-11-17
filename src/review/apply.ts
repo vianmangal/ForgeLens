@@ -37,6 +37,9 @@ export class Applier {
     if (!run || !run.active) {
       return empty("This run is no longer active, so nothing was applied.");
     }
+    if (!run.finished) {
+      return empty("The agent is still working on this run. Apply once it finishes.");
+    }
     const hunks = this.store.hunksOfRun(runId);
     const accepted = hunks.filter((h) => h.status === "accepted");
     const undecided = hunks.filter((h) => h.status === "proposed" || h.status === "approval_requested");
@@ -66,14 +69,17 @@ export class Applier {
     }
 
     const documents = new Map<string, vscode.TextDocument>();
-    const conflicts: string[] = [];
     for (const key of byUri.keys()) {
-      const uri = vscode.Uri.parse(key);
-      const base = this.store.baseOf(runId, uri);
-      const document = await vscode.workspace.openTextDocument(uri);
-      documents.set(key, document);
+      documents.set(key, await vscode.workspace.openTextDocument(vscode.Uri.parse(key)));
+    }
+    if (!this.store.getRun(runId)?.active || accepted.some((h) => h.status !== "accepted")) {
+      return empty("This run was cancelled or invalidated before the edit was written, so nothing was applied.");
+    }
+    const conflicts: string[] = [];
+    for (const [key, document] of documents) {
+      const base = this.store.baseOf(runId, document.uri);
       if (!base || hashText(document.getText()) !== base.contentHash) {
-        conflicts.push(vscode.workspace.asRelativePath(uri, false));
+        conflicts.push(vscode.workspace.asRelativePath(vscode.Uri.parse(key), false));
       }
     }
     if (conflicts.length > 0) {
@@ -124,15 +130,13 @@ export class Applier {
       if (!last) {
         return "There is no ForgeLens apply to undo.";
       }
-      const changed: string[] = [];
       const documents: vscode.TextDocument[] = [];
       for (const f of last.files) {
-        const document = await vscode.workspace.openTextDocument(f.uri);
-        documents.push(document);
-        if (hashText(document.getText()) !== f.afterHash) {
-          changed.push(vscode.workspace.asRelativePath(f.uri, false));
-        }
+        documents.push(await vscode.workspace.openTextDocument(f.uri));
       }
+      const changed = last.files
+        .filter((f, i) => hashText(documents[i].getText()) !== f.afterHash)
+        .map((f) => vscode.workspace.asRelativePath(f.uri, false));
       if (changed.length > 0) {
         return `Not undone: ${changed.join(", ")} changed after the apply. Use Ctrl+Z in those files instead.`;
       }
