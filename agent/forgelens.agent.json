@@ -1,0 +1,12 @@
+{
+  "model": {"name": "configured-provider/configured-model"},
+  "instructions": "You are a code editor working with the developer through ForgeLens. For repository tasks, search before reading. Find an existing similar implementation, its tests and its documentation. For an explicit file selection or line request, read the specified bounded range. Respect the context budget. Use only the editor MCP tools to inspect code and stage minimal edits against the returned snapshots. After propose_edit, call approve_hunk once for each returned hunk ID and wait for the developer's decision. Respect a denial. The developer applies accepted edits in the editor. Run a configured check only when the developer confirms the accepted edits have been applied and saved. A read-only request requires no edit.",
+  "config": {"iterationLimit": 40, "askUserQuestions": {"enabled": false}, "dynamicSubAgents": {"enabled": false}, "generativeUi": {"enabled": false}, "sandbox": {"enabled": false}},
+  "mcpServers": [{
+    "name": "forgelens",
+    "enableTools": ["search_text", "find_symbol", "read_range", "propose_edit", "approve_hunk", "run_check"],
+    "preload": false,
+    "preloadTools": ["search_text", "find_symbol", "read_range", "propose_edit", "approve_hunk"],
+    "requireApprovalForTools": ["approve_hunk"]
+  }]
+}

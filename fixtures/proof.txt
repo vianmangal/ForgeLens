@@ -1,0 +1,3 @@
+ForgeLens harness fixture
+The copper owl counted seven bells.
+End of proof fixture

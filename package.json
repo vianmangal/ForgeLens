@@ -1,0 +1,82 @@
+{
+  "name": "forgelens",
+  "displayName": "ForgeLens",
+  "publisher": "forgelens-team",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Review code changes through a locally hosted TrueForge agent.",
+  "engines": {
+    "vscode": "^1.98.0",
+    "node": ">=22.14"
+  },
+  "main": "./build/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "build": "npm run compile && esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=build/extension.cjs",
+    "test": "npm run compile && node --test test/*.test.cjs",
+    "vscode:prepublish": "npm run build"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "forgelens.openPanel",
+        "title": "ForgeLens: Open Agent Panel"
+      },
+      {
+        "command": "forgelens.runProof",
+        "title": "ForgeLens: Run Harness Proof"
+      },
+      {
+        "command": "forgelens.startProofConnector",
+        "title": "ForgeLens: Start Proof Connector"
+      },
+      {
+        "command": "forgelens.cancel",
+        "title": "ForgeLens: Cancel Run"
+      }
+    ],
+    "configuration": {
+      "title": "ForgeLens",
+      "properties": {
+        "forgelens.primaryModel": {
+          "type": "string",
+          "default": "",
+          "description": "Full provider/model name configured in local TrueForge."
+        },
+        "forgelens.trueforgePort": {
+          "type": "number",
+          "default": 8790,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TrueForge port on 127.0.0.1."
+        },
+        "forgelens.proofPort": {
+          "type": "number",
+          "default": 8792,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback port for the isolated Person 1 proof connector."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@truefoundry/trueforge-sdk": "0.185.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.98.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
