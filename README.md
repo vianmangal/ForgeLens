@@ -79,3 +79,16 @@ A paused turn releases its stream. The harness keeps the decision state in memor
 ## What this checkout verifies
 
 `npm test` covers streaming, event correlation, bounded follow-up, interrupted and replayed streams, cancellation, failure classification and the fixture. The live host exercises the installed extension, TrueForge and Ollama. Workspace search, the full review store, budget accounting, fallback policy and the three competition demonstrations depend on the other team contributions.
+
+### Live results on 17 November 2026
+
+These four sessions used the local Qwen3 1.7B proof model. The VS Code host test drove the same approval and cancel APIs exposed to the editor. It checked the persisted TrueForge events and the contents of the disposable workspace file after each run.
+
+| Exercise | Observed result | Local trace |
+| --- | --- | --- |
+| Reject a proposed edit | The model read line 2 through MCP, proposed one replacement, and received the recorded denial. | [Rejected hunk](http://127.0.0.1:8790/sessions/01m7n2wr0vefdme7dhwkffzbyz) |
+| Approve after five minutes | The model initially omitted the gate. The harness issued one follow-up for the missing ID. The same follow-up turn resumed after **300.046 seconds** between the recorded request and allow, and finished successfully. | [Delayed approval](http://127.0.0.1:8790/sessions/01m7n2xda5b9j9jnd9bw8x99wg) |
+| Cancel while awaiting approval | TrueForge recorded a cancelled terminal turn, zero approval answers and zero later extension approval or text callbacks. | [Cancelled review](http://127.0.0.1:8790/sessions/01m7n37jqy6q5233pgxm3xgj5t) |
+| Cancel during streamed text | The clean-clone extension cancelled after the first 3 visible characters. TrueForge recorded cancellation and the host observed zero later approval or text callbacks. | [Cancelled stream](http://127.0.0.1:8790/sessions/01m7n391z6pfq3fgtr9xhskhqv) |
+
+These links resolve on the machine holding the proof database. Teammates can reproduce the sessions with the steps above. A small model can claim in prose that a hunk was approved before issuing the tool call. The recorded TrueForge decision and the editor's hunk state determine eligibility for Apply.
