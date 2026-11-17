@@ -190,7 +190,7 @@ export class ReviewStore implements vscode.Disposable {
       }
       base = first;
     }
-    const existing: RawHunk[] = this.hunksOfRun(runId).filter((h) => h.snapshotId === base.snapshotId && h.status !== "invalidated");
+    const existing: RawHunk[] = this.hunksOfRun(runId).filter((h) => h.snapshotId === base.snapshotId && h.status !== "invalidated" && h.status !== "rejected");
     const result = buildProposal(base.text, request, existing);
     if (!result.ok) {
       return result;

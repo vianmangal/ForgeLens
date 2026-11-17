@@ -220,3 +220,22 @@ test("requestCancel reports whether it cancelled anything and markFinished sets 
   assert.equal(store.requestCancel(run.runId), false);
   assert.equal(store.requestCancel("missing"), false);
 });
+
+test("a rejected hunk no longer blocks a new proposal on the same lines, but a pending or accepted one does", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-q");
+  const snap = store.captureSnapshot(doc("file:///q.py", text));
+  const edit = (newText) => store.propose(run.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText });
+  const first = edit("b = 20");
+  assert.equal(first.ok, true);
+  assert.equal(edit("b = 21").ok, false);
+  store.decide(first.hunkIds[0], "accepted");
+  assert.equal(edit("b = 22").ok, false);
+  const other = store.createRun("agent", "t", "run-r");
+  const first2 = store.propose(other.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 20" });
+  store.decide(first2.hunkIds[0], "rejected");
+  const retry = store.propose(other.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 23" });
+  assert.equal(retry.ok, true);
+  assert.equal(store.getHunk(first2.hunkIds[0]).status, "rejected");
+  assert.equal(store.hunksOfRun(other.runId).length, 2);
+});
