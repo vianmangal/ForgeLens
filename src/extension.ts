@@ -6,6 +6,7 @@ import { type RunState } from "./shared/types";
 import { listenProof, ProofFixture, proofInstruction, proofSpec } from "./proof/connector";
 import { AgentPanel } from "./ui/panel";
 import { activateReview } from "./review";
+import { instructionLabel } from "./review/store";
 
 let active: Harness | undefined;
 let listener: ReturnType<typeof listenProof> | undefined;
@@ -90,7 +91,13 @@ export async function activate(context: vscode.ExtensionContext) {
     panel.open();
     return harness.startRun(name, instruction, selection);
   };
-  panel = new AgentPanel(context.extensionUri, { run: instruction => startRun(model(), instruction), cancel,
+  panel = new AgentPanel(context.extensionUri, {
+    run: instruction => {
+      const name = model();
+      review.expectRun({ kind: "agent", label: instructionLabel(instruction), instruction });
+      try { return startRun(name, instruction); } finally { review.expectRun(undefined); }
+    },
+    cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id) });
   const review = activateReview(context);
   context.subscriptions.push(review.connectHarness({

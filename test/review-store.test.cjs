@@ -16,7 +16,7 @@ class Uri {
 const fake = { EventEmitter, Uri, workspace: { asRelativePath: u => u.path.replace(/^\//, "") } };
 const load = Module._load;
 Module._load = function (request, ...rest) { return request === "vscode" ? fake : load.call(this, request, ...rest); };
-const { ReviewStore } = require("../dist/review/store.js");
+const { ReviewStore, instructionLabel } = require("../dist/review/store.js");
 
 const doc = (uri, text, version = 1) => ({ uri: Uri.parse(uri), version, getText: () => text });
 const text = "def f():\n    a = 1\n    b = 2\n    c = 3\n    return a\n";
@@ -76,4 +76,107 @@ test("serialize runs apply and cancel one after another", async () => {
   const b = store.serialize(async () => { order.push(2); });
   await Promise.all([a, b]);
   assert.deepEqual(order, [1, 2]);
+});
+
+const twoHunks = (store, runId, uri) => {
+  const snap = store.captureSnapshot(doc(uri, text));
+  const res = store.propose(runId, snap.snapshotId, { kind: "range", startLine: 1, endLine: 5,
+    newText: "def f():\n    \"\"\"D.\"\"\"\n    a = 1\n    b = 2\n    c = 3\n    return a + 1\n" });
+  assert.equal(res.ok, true);
+  return res.hunkIds;
+};
+
+test("decideAll decides every pending hunk of a local run and nothing else", () => {
+  const store = new ReviewStore();
+  const decisions = [];
+  store.onDidDecide(e => decisions.push([e.hunkId, e.decision, e.reason]));
+  const run = store.createRun("inline", "t", "run-a");
+  const other = store.createRun("inline", "t", "run-b");
+  const [h1, h2] = twoHunks(store, run.runId, "file:///a.py");
+  const [o1] = twoHunks(store, other.runId, "file:///b.py");
+  store.decide(h1, "accepted");
+  const decided = store.decideAll(run.runId, "rejected", "no");
+  assert.deepEqual(decided, [h2]);
+  assert.equal(store.getHunk(h1).status, "accepted");
+  assert.equal(store.getHunk(h2).status, "rejected");
+  assert.equal(store.getHunk(o1).status, "proposed");
+  assert.deepEqual(decisions.at(-1), [h2, "rejected", "no"]);
+  assert.deepEqual(store.decideAll(run.runId, "accepted"), []);
+});
+
+test("pendingHunkIds filters by status and skips queued hunks", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-c");
+  const [h1, h2] = twoHunks(store, run.runId, "file:///c.py");
+  assert.deepEqual(store.pendingHunkIds(run.runId, "approval_requested"), []);
+  store.markApprovalRequested(h1, "call-1");
+  assert.deepEqual(store.pendingHunkIds(run.runId, "approval_requested"), [h1]);
+  assert.deepEqual(store.pendingHunkIds(run.runId), [h1, h2]);
+  store.markQueued(h1);
+  assert.deepEqual(store.pendingHunkIds(run.runId, "approval_requested"), []);
+  assert.deepEqual(store.pendingHunkIds(run.runId), [h2]);
+});
+
+test("bulk choice is remembered while active and cleared on invalidate or apply", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-d");
+  assert.equal(store.getBulkChoice(run.runId), undefined);
+  assert.equal(store.setBulkChoice(run.runId, "accepted"), true);
+  assert.equal(store.getBulkChoice(run.runId), "accepted");
+  store.clearBulkChoice(run.runId);
+  assert.equal(store.getBulkChoice(run.runId), undefined);
+
+  store.setBulkChoice(run.runId, "rejected");
+  store.invalidateRun(run.runId);
+  assert.equal(store.getBulkChoice(run.runId), undefined);
+  assert.equal(store.setBulkChoice(run.runId, "accepted"), false);
+
+  const second = store.createRun("agent", "t", "run-e");
+  const [h1] = twoHunks(store, second.runId, "file:///d.py");
+  store.setBulkChoice(second.runId, "accepted");
+  store.markApplied(second.runId, [h1]);
+  assert.equal(store.getBulkChoice(second.runId), undefined);
+  assert.equal(store.setBulkChoice("missing", "accepted"), false);
+});
+
+test("a later approval request can be decided with the remembered bulk choice", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-f");
+  const [h1, h2] = twoHunks(store, run.runId, "file:///e.py");
+  store.setBulkChoice(run.runId, "accepted");
+  assert.equal(store.markApprovalRequested(h1, "call-1"), true);
+  assert.equal(store.getBulkChoice(run.runId), "accepted");
+  store.markQueued(h1);
+  assert.equal(store.decide(h1, store.getBulkChoice(run.runId)), true);
+  assert.equal(store.getHunk(h1).status, "accepted");
+  assert.equal(store.getHunk(h2).status, "proposed");
+});
+
+test("visibleRuns hides inactive runs without hunks and latestActiveRun picks the newest active one", () => {
+  const store = new ReviewStore();
+  const empty = store.createRun("inline", "empty", "run-g");
+  const full = store.createRun("inline", "full", "run-h");
+  twoHunks(store, full.runId, "file:///f.py");
+  const working = store.createRun("agent", "working", "run-i");
+  assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-i", "run-h", "run-g"]);
+  assert.equal(store.latestActiveRun().runId, "run-i");
+  store.invalidateRun(empty.runId);
+  store.invalidateRun(working.runId);
+  assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-h"]);
+  assert.equal(store.latestActiveRun().runId, "run-h");
+  store.invalidateRun(full.runId);
+  assert.equal(store.latestActiveRun(), undefined);
+  assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-h"]);
+});
+
+test("runs keep their instruction and labels use the first 50 characters", () => {
+  const store = new ReviewStore();
+  const instruction = "  Rename   the helper\nto something much clearer and add a docstring explaining every parameter  ";
+  const label = instructionLabel(instruction);
+  assert.equal(label.length, 50);
+  assert.equal(label, "Rename the helper to something much clearer and ad");
+  assert.equal(instructionLabel("short"), "short");
+  const run = store.createRun("inline", label, "run-j", instruction);
+  assert.equal(store.getRun(run.runId).instruction, instruction);
+  assert.equal(store.createRun("agent", "x", "run-k").instruction, undefined);
 });

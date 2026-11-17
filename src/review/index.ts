@@ -4,7 +4,7 @@ import type { Selection } from "../trueforge/harness";
 import { Applier, ApplyOutcome } from "./apply";
 import { HunkCodeLensProvider, HunkDecorations } from "./codelens";
 import { BASE_SCHEME, openDiff, PROPOSED_SCHEME, ReviewDocuments } from "./documents";
-import { ReviewStore } from "./store";
+import { Decision, instructionLabel, ReviewStore } from "./store";
 import { ReviewNode, ReviewTree } from "./tree";
 
 export interface HarnessLink {
@@ -27,6 +27,13 @@ export interface ReviewApi {
   openDiff(runId: RunId, uri: vscode.Uri, hunkId?: HunkId): Promise<void>;
   applyAccepted(runId: RunId): Promise<ApplyOutcome>;
   markRunFinished(runId: RunId): void;
+  expectRun(meta: ExpectedRun | undefined): void;
+}
+
+export interface ExpectedRun {
+  kind: "inline" | "agent";
+  label: string;
+  instruction: string;
 }
 
 interface LineSelection {
@@ -77,7 +84,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   const lastFailure = new Map<RunId, string>();
   let lastHarnessRun: RunId | undefined;
   let link: HarnessLink | undefined;
-  let nextLabel: { kind: "inline" | "agent"; label: string } | undefined;
+  let nextLabel: ExpectedRun | undefined;
+  const REJECT_REASON = "Rejected by the developer in ForgeLens review.";
 
   const treeView = vscode.window.createTreeView("forgelens.review", { treeDataProvider: tree, showCollapseAll: true });
 
@@ -143,9 +151,60 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     }
   };
 
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+
+  const refreshStatus = () => {
+    const run = store.latestActiveRun();
+    if (!run) {
+      statusBar.hide();
+      return;
+    }
+    const hunks = store.hunksOfRun(run.runId);
+    const accepted = hunks.filter((h) => h.status === "accepted").length;
+    const rejected = hunks.filter((h) => h.status === "rejected").length;
+    const canApply = finished.has(run.runId) && accepted > 0;
+    statusBar.text = `ForgeLens: ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected${canApply ? " · Apply" : ""}`;
+    statusBar.tooltip = run.instruction ?? run.label;
+    statusBar.command = canApply
+      ? { command: "forgelens.applyAccepted", title: "Apply accepted changes", arguments: [{ type: "run", runId: run.runId }] }
+      : "forgelens.review.focus";
+    statusBar.show();
+  };
+
   const markRunFinished = (runId: RunId) => {
     finished.add(runId);
+    store.clearBulkChoice(runId);
+    refreshStatus();
     void maybePromptApply(runId);
+  };
+
+  const submit = (id: HunkId, allow: boolean): boolean => {
+    if (!link) {
+      return false;
+    }
+    const queued = allow ? link.approve(id) : link.reject(id, REJECT_REASON);
+    if (queued) {
+      store.markQueued(id);
+    }
+    return queued;
+  };
+
+  const decideAll = (arg: unknown, decision: Decision) => {
+    const node = arg as ReviewNode | undefined;
+    const runId = node && node.type === "run" ? node.runId : undefined;
+    const run = runId ? store.getRun(runId) : undefined;
+    if (!runId || !run || !run.active) {
+      return;
+    }
+    const allow = decision === "accepted";
+    if (link && harnessRuns.has(runId)) {
+      store.setBulkChoice(runId, decision);
+      for (const id of store.pendingHunkIds(runId, "approval_requested")) {
+        submit(id, allow);
+      }
+      return;
+    }
+    store.decideAll(runId, decision, allow ? undefined : REJECT_REASON);
   };
 
   const decide = (arg: unknown, allow: boolean) => {
@@ -162,15 +221,12 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
         vscode.window.showInformationMessage("ForgeLens: the agent has not asked for approval of this change yet. It will in a moment.");
         return;
       }
-      const queued = allow ? link.approve(id) : link.reject(id, "Rejected by the developer in ForgeLens review.");
-      if (queued) {
-        store.markQueued(id);
-      } else {
+      if (!submit(id, allow)) {
         vscode.window.showWarningMessage("ForgeLens: this change can no longer be decided.");
       }
       return;
     }
-    if (!store.decide(id, allow ? "accepted" : "rejected", allow ? undefined : "Rejected by the developer in ForgeLens review.")) {
+    if (!store.decide(id, allow ? "accepted" : "rejected", allow ? undefined : REJECT_REASON)) {
       vscode.window.showWarningMessage("ForgeLens: this change can no longer be decided.");
     }
   };
@@ -228,7 +284,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
           }
         });
         try {
-          nextLabel = { kind: "inline", label: `Inline: ${path}:${target.startLine}-${target.endLine}` };
+          nextLabel = { kind: "inline", label: instructionLabel(instruction), instruction };
           const finishedState = connected.startRun(instruction, {
             path,
             startLine: target.startLine,
@@ -258,9 +314,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     const subs = [
       l.onState((state) => {
         if (!store.getRun(state.runId)) {
-          const meta = nextLabel ?? { kind: "agent" as const, label: `Agent task ${state.runId.slice(0, 8)}` };
+          const meta = nextLabel ?? { kind: "agent" as const, label: `Agent task ${state.runId.slice(0, 8)}`, instruction: undefined };
           nextLabel = undefined;
-          store.createRun(meta.kind, meta.label, state.runId);
+          store.createRun(meta.kind, meta.label, state.runId, meta.instruction);
           harnessRuns.add(state.runId);
           lastHarnessRun = state.runId;
         }
@@ -268,7 +324,15 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
           markRunFinished(state.runId);
         }
       }),
-      l.onApproval((e) => store.markApprovalRequested(e.hunkId, e.toolCallId)),
+      l.onApproval((e) => {
+        if (!store.markApprovalRequested(e.hunkId, e.toolCallId)) {
+          return;
+        }
+        const bulk = store.getBulkChoice(e.runId);
+        if (bulk && harnessRuns.has(e.runId)) {
+          submit(e.hunkId, bulk === "accepted");
+        }
+      }),
       l.onDecision((e) => store.decide(e.hunkId, e.allowed ? "accepted" : "rejected")),
       l.onInvalidate((runId) => {
         if (store.getRun(runId)?.active) {
@@ -294,6 +358,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     store,
     tree,
     treeView,
+    statusBar,
+    store.onDidChange(() => refreshStatus()),
     lenses,
     decorations,
     baseDocs,
@@ -317,6 +383,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     vscode.commands.registerCommand("forgelens.editSelection", editSelection),
     vscode.commands.registerCommand("forgelens.acceptHunk", (arg: unknown) => decide(arg, true)),
     vscode.commands.registerCommand("forgelens.rejectHunk", (arg: unknown) => decide(arg, false)),
+    vscode.commands.registerCommand("forgelens.acceptAll", (arg: unknown) => decideAll(arg, "accepted")),
+    vscode.commands.registerCommand("forgelens.rejectAll", (arg: unknown) => decideAll(arg, "rejected")),
     vscode.commands.registerCommand("forgelens.openHunkDiff", async (arg: unknown) => {
       const id = hunkIdOf(arg);
       const hunk = id ? store.getHunk(id) : undefined;
@@ -397,6 +465,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     connectHarness,
     openDiff: (runId, uri, hunkId) => openDiff(store, runId, uri, hunkId ? store.getHunk(hunkId) : undefined),
     applyAccepted: (runId) => applier.applyAccepted(runId),
-    markRunFinished
+    markRunFinished,
+    expectRun: (meta) => {
+      nextLabel = meta;
+    }
   };
 }

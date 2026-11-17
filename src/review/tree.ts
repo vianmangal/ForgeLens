@@ -50,7 +50,7 @@ export class ReviewTree implements vscode.TreeDataProvider<ReviewNode>, vscode.D
 
   getChildren(node?: ReviewNode): ReviewNode[] {
     if (!node) {
-      return this.store.allRuns().map((r) => ({ type: "run", runId: r.runId }));
+      return this.store.visibleRuns().map((r) => ({ type: "run", runId: r.runId }));
     }
     if (node.type === "run") {
       return this.store.urisOfRun(node.runId).map((uri) => ({ type: "file", runId: node.runId, uri }));
@@ -70,10 +70,19 @@ export class ReviewTree implements vscode.TreeDataProvider<ReviewNode>, vscode.D
       const applied = hunks.filter((h) => h.status === "applied").length;
       const item = new vscode.TreeItem(run?.label ?? node.runId, vscode.TreeItemCollapsibleState.Expanded);
       const state = !run ? "" : run.reverted ? "undone" : run.active ? "reviewing" : applied > 0 ? "applied" : "closed";
-      item.description = `${state} · ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected`;
+      item.description =
+        run?.active && hunks.length === 0
+          ? "working…"
+          : `${state} · ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected`;
       item.iconPath = new vscode.ThemeIcon(run?.kind === "agent" ? "hubot" : "edit");
       item.contextValue = run?.active ? "run-active" : "run-inactive";
-      item.tooltip = `${node.runId}`;
+      const tip = new vscode.MarkdownString();
+      if (run?.instruction) {
+        tip.appendText(run.instruction);
+        tip.appendMarkdown("\n\n");
+      }
+      tip.appendText(node.runId);
+      item.tooltip = tip;
       return item;
     }
     if (node.type === "file") {

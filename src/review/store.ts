@@ -12,6 +12,8 @@ export interface RunReview {
   runId: RunId;
   kind: "inline" | "agent";
   label: string;
+  instruction?: string;
+  bulk?: Decision;
   active: boolean;
   reverted: boolean;
   order: HunkId[];
@@ -35,6 +37,12 @@ export interface HunksAddedEvent {
 }
 
 export type ProposeResult = { ok: true; hunkIds: HunkId[] } | { ok: false; error: string };
+
+export const LABEL_LENGTH = 50;
+
+export function instructionLabel(instruction: string): string {
+  return instruction.replace(/\s+/g, " ").trim().slice(0, LABEL_LENGTH);
+}
 
 export function newRunId(): RunId {
   return `run-${randomUUID().slice(0, 8)}`;
@@ -80,8 +88,8 @@ export class ReviewStore implements vscode.Disposable {
     return this.snapshots.get(snapshotId);
   }
 
-  createRun(kind: "inline" | "agent", label: string, runId: RunId = newRunId()): RunReview {
-    const run: RunReview = { runId, kind, label, active: true, reverted: false, order: [], baseByUri: new Map() };
+  createRun(kind: "inline" | "agent", label: string, runId: RunId = newRunId(), instruction?: string): RunReview {
+    const run: RunReview = { runId, kind, label, instruction, active: true, reverted: false, order: [], baseByUri: new Map() };
     this.runs.set(runId, run);
     this.changeEmitter.fire(runId);
     return run;
@@ -93,6 +101,14 @@ export class ReviewStore implements vscode.Disposable {
 
   allRuns(): RunReview[] {
     return [...this.runs.values()].reverse();
+  }
+
+  visibleRuns(): RunReview[] {
+    return this.allRuns().filter((r) => r.active || r.order.length > 0);
+  }
+
+  latestActiveRun(): RunReview | undefined {
+    return this.allRuns().find((r) => r.active);
   }
 
   getHunk(hunkId: HunkId): Hunk | undefined {
@@ -221,6 +237,43 @@ export class ReviewStore implements vscode.Disposable {
     return true;
   }
 
+  pendingHunkIds(runId: RunId, status?: Hunk["status"]): HunkId[] {
+    return this.hunksOfRun(runId)
+      .filter((h) => (status ? h.status === status : h.status === "proposed" || h.status === "approval_requested") && !this.queued.has(h.id))
+      .map((h) => h.id);
+  }
+
+  decideAll(runId: RunId, decision: Decision, reason?: string): HunkId[] {
+    const decided: HunkId[] = [];
+    for (const id of this.pendingHunkIds(runId)) {
+      if (this.decide(id, decision, reason)) {
+        decided.push(id);
+      }
+    }
+    return decided;
+  }
+
+  setBulkChoice(runId: RunId, decision: Decision): boolean {
+    const run = this.runs.get(runId);
+    if (!run || !run.active) {
+      return false;
+    }
+    run.bulk = decision;
+    return true;
+  }
+
+  getBulkChoice(runId: RunId): Decision | undefined {
+    const run = this.runs.get(runId);
+    return run && run.active ? run.bulk : undefined;
+  }
+
+  clearBulkChoice(runId: RunId): void {
+    const run = this.runs.get(runId);
+    if (run) {
+      run.bulk = undefined;
+    }
+  }
+
   requestCancel(runId: RunId): void {
     const run = this.runs.get(runId);
     if (!run || !run.active) {
@@ -236,6 +289,7 @@ export class ReviewStore implements vscode.Disposable {
       return;
     }
     run.active = false;
+    run.bulk = undefined;
     for (const hunk of this.hunksOfRun(runId)) {
       this.queued.delete(hunk.id);
       if (hunk.status !== "applied") {
@@ -262,6 +316,7 @@ export class ReviewStore implements vscode.Disposable {
       }
     }
     run.active = false;
+    run.bulk = undefined;
     this.changeEmitter.fire(runId);
   }
 

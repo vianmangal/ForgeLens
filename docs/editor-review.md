@@ -11,6 +11,12 @@
   - CodeLens in the diff, if `diffEditor.codeLens` is on.
   - Inline buttons in **ForgeLens Review** in the Explorer.
 - **How a decision reaches TrueForge.** For harness runs, a click calls `approve` or `reject`. The change shows "sending decision" until `onDecision` confirms it. Before TrueForge asks for approval of a change, a click explains that the request hasn't arrived yet.
+- **Accept All and Reject All per run**, as inline buttons on an active run in **ForgeLens Review**.
+  - For rehearsal runs, every pending change is decided at once.
+  - For harness runs, every change TrueForge has already asked about is sent through `approve` or `reject` and shows "sending decision" until `onDecision` confirms it. The choice is remembered for the run, so a change whose approval request arrives later is decided the same way. The choice is dropped when the run is invalidated, applied or finished.
+- **Status bar.** A left-side item for the most recent active run reads `ForgeLens: N changes · A accepted · R rejected`, plus ` · Apply` once the run is finished and at least one change is accepted. Clicking it applies the accepted changes when Apply is shown, and otherwise focuses **ForgeLens Review**. It is hidden when no run is active.
+- **Run list.** Runs with no changes that are no longer active are hidden. An active run with no changes yet shows "working…".
+- **Original instruction.** The run tooltip shows the instruction. The run label is its first 50 characters. Inline edits store what you typed. Agent-panel runs get theirs through `review.expectRun({kind, label, instruction})`, which `src/extension.ts` calls just before `startRun`.
 - **Apply prompt.** When the run reaches `ready_to_apply` and every change is decided, ForgeLens offers to apply the accepted changes.
 - **Apply** writes every accepted change in one `WorkspaceEdit`, after checking that each file still matches its snapshot. On a mismatch, nothing is written and the file is named.
 - **Undo:** `Ctrl+Z`, or **ForgeLens: Undo Last Apply**.
