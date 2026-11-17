@@ -70,8 +70,8 @@ export class Applier {
     }
 
     const documents = new Map<string, vscode.TextDocument>();
-    for (const key of byUri.keys()) {
-      documents.set(key, await vscode.workspace.openTextDocument(vscode.Uri.parse(key)));
+    for (const uri of this.store.urisOfRun(runId)) {
+      documents.set(uri.toString(), await vscode.workspace.openTextDocument(uri));
     }
     return this.store.serialize(async () => {
       if (!this.store.getRun(runId)?.active || accepted.some((h) => h.status !== "accepted")) {
@@ -80,7 +80,7 @@ export class Applier {
       const conflicts: string[] = [];
       for (const [key, document] of documents) {
         const base = this.store.baseOf(runId, document.uri);
-        if (!base || hashText(document.getText()) !== base.contentHash) {
+        if (!base || document.version !== base.documentVersion || hashText(document.getText()) !== base.contentHash) {
           conflicts.push(vscode.workspace.asRelativePath(vscode.Uri.parse(key), false));
         }
       }

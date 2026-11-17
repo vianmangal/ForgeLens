@@ -434,7 +434,7 @@ export class ReviewStore implements vscode.Disposable {
       }
       const base = this.snapshots.get(snapshotId);
       const flag = `${run.runId}|${key}`;
-      const isConflict = !!base && base.contentHash !== hash;
+      const isConflict = !!base && (base.documentVersion !== document.version || base.contentHash !== hash);
       if (isConflict !== this.conflicted.has(flag)) {
         if (isConflict) {
           this.conflicted.add(flag);

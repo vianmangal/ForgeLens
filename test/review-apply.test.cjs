@@ -224,3 +224,29 @@ for (const method of ["requestCancel", "invalidateRun"]) {
     }
   });
 }
+
+
+test("a version-only change blocks every write and names the file", async () => {
+  const { store, applier, runId, ids } = setup();
+  ids.forEach(id => store.decide(id, "accepted"));
+  store.markFinished(runId);
+  docs.get("file:///b.py").version++;
+  const outcome = await applier.applyAccepted(runId);
+  assert.equal(outcome.applied, false);
+  assert.deepEqual(outcome.conflicts, ["b.py"]);
+  assert.match(outcome.message, /b\.py/);
+  assert.equal(applied.length, 0);
+  for (const doc of docs.values()) assert.equal(doc.text, text);
+});
+
+test("a conflict in a rejected file also blocks the run's accepted edits", async () => {
+  const { store, applier, runId, ids } = setup();
+  store.decide(ids[0], "rejected");
+  ids.slice(1).forEach(id => store.decide(id, "accepted"));
+  store.markFinished(runId);
+  docs.get("file:///a.py").version++;
+  const outcome = await applier.applyAccepted(runId);
+  assert.equal(outcome.applied, false);
+  assert.deepEqual(outcome.conflicts, ["a.py"]);
+  assert.equal(applied.length, 0);
+});

@@ -282,7 +282,7 @@ test("canApply needs an active finished run with an accepted hunk and no conflic
   assert.equal(store.hasConflict(run.runId), true);
   assert.equal(store.canApply(run.runId), false);
   store.refreshConflicts(doc("file:///t.py", text, 3));
-  assert.equal(store.canApply(run.runId), true);
+  assert.equal(store.canApply(run.runId), false);
   store.decide(h2, "rejected");
   store.markApplied(run.runId, [h1]);
   assert.equal(store.canApply(run.runId), false);
@@ -320,4 +320,23 @@ test("clearInactive removes applied, cancelled and invalidated runs and keeps ac
   assert.equal(store.getHunk(a1), undefined);
   assert.equal(store.getHunk(k1).status, "proposed");
   assert.equal(store.clearInactive(), 0);
+});
+
+
+test("conflict indicators require both the snapshot version and hash", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "versions");
+  const uri = Uri.parse("file:///version.py");
+  const [id] = twoHunks(store, run.runId, uri.toString());
+  store.decide(id, "accepted");
+  store.markFinished(run.runId);
+  store.refreshConflicts(doc(uri.toString(), text, 1));
+  assert.equal(store.canApply(run.runId), true);
+  store.refreshConflicts(doc(uri.toString(), text, 2));
+  assert.equal(store.isConflicted(run.runId, uri), true);
+  assert.equal(store.canApply(run.runId), false);
+  store.refreshConflicts(doc(uri.toString(), text + "changed", 1));
+  assert.equal(store.isConflicted(run.runId, uri), true);
+  store.refreshConflicts(doc(uri.toString(), text, 1));
+  assert.equal(store.isConflicted(run.runId, uri), false);
 });
