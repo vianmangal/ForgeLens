@@ -13,7 +13,7 @@ export interface RunReview {
   kind: "inline" | "agent";
   label: string;
   instruction?: string;
-  bulk?: Decision;
+  bulk?: Map<HunkId, Decision>;
   active: boolean;
   finished: boolean;
   reverted: boolean;
@@ -300,6 +300,7 @@ export class ReviewStore implements vscode.Disposable {
     if (hunk.status !== "proposed" && hunk.status !== "approval_requested") {
       return false;
     }
+    run.bulk?.delete(hunkId);
     hunk.status = decision;
     this.decideEmitter.fire({ runId: hunk.runId, hunkId, decision, reason, toolCallId: hunk.toolCallId });
     this.changeEmitter.fire(hunk.runId);
@@ -327,13 +328,13 @@ export class ReviewStore implements vscode.Disposable {
     if (!run || !run.active) {
       return false;
     }
-    run.bulk = decision;
+    run.bulk = new Map(this.pendingHunkIds(runId).map((id) => [id, decision]));
     return true;
   }
 
-  getBulkChoice(runId: RunId): Decision | undefined {
+  getBulkChoice(runId: RunId, hunkId: HunkId): Decision | undefined {
     const run = this.runs.get(runId);
-    return run && run.active ? run.bulk : undefined;
+    return run && run.active ? run.bulk?.get(hunkId) : undefined;
   }
 
   clearBulkChoice(runId: RunId): void {

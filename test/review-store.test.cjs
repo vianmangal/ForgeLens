@@ -117,39 +117,47 @@ test("pendingHunkIds filters by status and skips queued hunks", () => {
   assert.deepEqual(store.pendingHunkIds(run.runId), [h2]);
 });
 
-test("bulk choice is remembered while active and cleared on invalidate or apply", async () => {
-  const store = new ReviewStore();
-  const run = store.createRun("agent", "t", "run-d");
-  assert.equal(store.getBulkChoice(run.runId), undefined);
-  assert.equal(store.setBulkChoice(run.runId, "accepted"), true);
-  assert.equal(store.getBulkChoice(run.runId), "accepted");
-  store.clearBulkChoice(run.runId);
-  assert.equal(store.getBulkChoice(run.runId), undefined);
+for (const decision of ["accepted", "rejected"]) {
+  test(`${decision} bulk choice covers existing IDs with delayed approvals, never later proposals`, () => {
+    const store = new ReviewStore();
+    const run = store.createRun("agent", "bulk");
+    const [first, delayed] = twoHunks(store, run.runId, "file:///bulk.py");
+    store.markApprovalRequested(first, "first-call");
+    assert.equal(store.setBulkChoice(run.runId, decision), true);
+    assert.equal(store.getBulkChoice(run.runId, first), decision);
+    store.markQueued(first);
+    assert.equal(store.decide(first, store.getBulkChoice(run.runId, first)), true);
+    assert.equal(store.getBulkChoice(run.runId, first), undefined);
+    const later = anchorEdit(store, run.runId, "file:///bulk.py", "b = 7");
+    assert.equal(later.ok, true);
+    const unseen = later.hunkIds[0];
+    store.markApprovalRequested(unseen, "later-call");
+    assert.equal(store.getBulkChoice(run.runId, unseen), undefined);
+    assert.equal(store.getHunk(unseen).status, "approval_requested");
+    assert.equal(store.markApprovalRequested(delayed, "delayed-call"), true);
+    assert.equal(store.decide(delayed, store.getBulkChoice(run.runId, delayed)), true);
+    assert.equal(store.getHunk(delayed).status, decision);
+    assert.equal(store.getHunk(unseen).status, "approval_requested");
+  });
+}
 
+test("bulk choices clear on explicit clearing, invalidation and Apply", async () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "bulk");
+  const [first] = twoHunks(store, run.runId, "file:///bulk-clear.py");
+  store.setBulkChoice(run.runId, "accepted");
+  store.clearBulkChoice(run.runId);
+  assert.equal(store.getBulkChoice(run.runId, first), undefined);
   store.setBulkChoice(run.runId, "rejected");
   await store.invalidateRun(run.runId);
-  assert.equal(store.getBulkChoice(run.runId), undefined);
+  assert.equal(store.getBulkChoice(run.runId, first), undefined);
   assert.equal(store.setBulkChoice(run.runId, "accepted"), false);
-
-  const second = store.createRun("agent", "t", "run-e");
-  const [h1] = twoHunks(store, second.runId, "file:///d.py");
+  const second = store.createRun("agent", "bulk");
+  const [id] = twoHunks(store, second.runId, "file:///bulk-applied.py");
   store.setBulkChoice(second.runId, "accepted");
-  store.markApplied(second.runId, [h1]);
-  assert.equal(store.getBulkChoice(second.runId), undefined);
+  store.markApplied(second.runId, [id]);
+  assert.equal(store.getBulkChoice(second.runId, id), undefined);
   assert.equal(store.setBulkChoice("missing", "accepted"), false);
-});
-
-test("a later approval request can be decided with the remembered bulk choice", () => {
-  const store = new ReviewStore();
-  const run = store.createRun("agent", "t", "run-f");
-  const [h1, h2] = twoHunks(store, run.runId, "file:///e.py");
-  store.setBulkChoice(run.runId, "accepted");
-  assert.equal(store.markApprovalRequested(h1, "call-1"), true);
-  assert.equal(store.getBulkChoice(run.runId), "accepted");
-  store.markQueued(h1);
-  assert.equal(store.decide(h1, store.getBulkChoice(run.runId)), true);
-  assert.equal(store.getHunk(h1).status, "accepted");
-  assert.equal(store.getHunk(h2).status, "proposed");
 });
 
 test("visibleRuns hides inactive runs without hunks and latestActiveRun picks the newest active one", async () => {

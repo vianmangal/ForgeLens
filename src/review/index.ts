@@ -212,7 +212,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
       store.setBulkChoice(runId, decision);
       const sent = store.pendingHunkIds(runId, "approval_requested").filter((id) => submit(id, allow)).length;
       const verb = allow ? "accepted" : "rejected";
-      vscode.window.showInformationMessage(`ForgeLens: ${sent} change(s) sent as ${verb}. Changes this run proposes later will be ${verb} automatically.`);
+      vscode.window.showInformationMessage(`ForgeLens: ${sent} change(s) sent as ${verb}. The choice applies only to the changes currently in this review.`);
       return;
     }
     store.decideAll(runId, decision, allow ? undefined : REJECT_REASON);
@@ -343,7 +343,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
         if (!store.markApprovalRequested(e.hunkId, e.toolCallId)) {
           return;
         }
-        const bulk = store.getBulkChoice(e.runId);
+        const bulk = store.getBulkChoice(e.runId, e.hunkId);
         if (bulk && harnessRuns.has(e.runId)) {
           submit(e.hunkId, bulk === "accepted");
         }
