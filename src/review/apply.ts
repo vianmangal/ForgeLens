@@ -41,9 +41,8 @@ export class Applier {
       return empty("The agent is still working on this run. Apply once it finishes.");
     }
     const hunks = this.store.hunksOfRun(runId);
-    const accepted = hunks.filter((h) => h.status === "accepted");
     const undecided = hunks.filter((h) => h.status === "proposed" || h.status === "approval_requested");
-    if (accepted.length === 0) {
+    if (!hunks.some((h) => h.status === "accepted")) {
       return empty("No accepted changes to apply yet. Accept at least one change first.");
     }
     if (undecided.length > 0 && confirmUndecided) {
@@ -60,9 +59,11 @@ export class Applier {
       }
     }
 
+    const accepted = this.store.hunksOfRun(runId).filter((h) => h.status === "accepted");
+    const acceptedIds = new Set(accepted.map((h) => h.id));
     const byUri = new Map<string, Hunk[]>();
     for (const uri of this.store.urisOfRun(runId)) {
-      const list = this.store.hunksOfRunAndUri(runId, uri).filter((h) => h.status === "accepted");
+      const list = this.store.hunksOfRunAndUri(runId, uri).filter((h) => acceptedIds.has(h.id));
       if (list.length > 0) {
         byUri.set(uri.toString(), list);
       }

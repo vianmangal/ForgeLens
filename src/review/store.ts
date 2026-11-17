@@ -112,6 +112,59 @@ export class ReviewStore implements vscode.Disposable {
     return this.allRuns().find((r) => r.active);
   }
 
+  statusRun(): RunReview | undefined {
+    const live = this.allRuns().filter((r) => r.active);
+    return live.find((r) => this.hunksOfRun(r.runId).some((h) => h.status === "proposed" || h.status === "approval_requested" || h.status === "accepted")) ?? live[0];
+  }
+
+  hasConflict(runId: RunId): boolean {
+    return this.urisOfRun(runId).some((uri) => this.isConflicted(runId, uri));
+  }
+
+  canApply(runId: RunId): boolean {
+    const run = this.runs.get(runId);
+    return !!run && run.active && run.finished && !this.hasConflict(runId) && this.hunksOfRun(runId).some((h) => h.status === "accepted");
+  }
+
+  clearInactive(): number {
+    let removed = 0;
+    for (const run of [...this.runs.values()]) {
+      if (run.active) {
+        continue;
+      }
+      for (const id of run.order) {
+        this.hunks.delete(id);
+        this.queued.delete(id);
+      }
+      this.clearConflicts(run.runId);
+      this.runs.delete(run.runId);
+      removed++;
+    }
+    if (removed > 0) {
+      this.changeEmitter.fire(undefined);
+    }
+    return removed;
+  }
+
+  private supersedeOlderRuns(runId: RunId, uriKey: string): void {
+    const older: RunId[] = [];
+    for (const run of this.runs.values()) {
+      if (run.runId === runId) {
+        break;
+      }
+      const snapshotId = run.baseByUri.get(uriKey);
+      if (!run.active || !snapshotId) {
+        continue;
+      }
+      const hunks = this.hunksOfRun(run.runId);
+      const pendingHere = hunks.some((h) => h.snapshotId === snapshotId && (h.status === "proposed" || h.status === "approval_requested"));
+      if (pendingHere && !hunks.some((h) => h.status === "applied")) {
+        older.push(run.runId);
+      }
+    }
+    older.forEach((id) => this.requestCancel(id));
+  }
+
   getHunk(hunkId: HunkId): Hunk | undefined {
     return this.hunks.get(hunkId);
   }
@@ -203,6 +256,7 @@ export class ReviewStore implements vscode.Disposable {
       run.order.push(id);
       ids.push(id);
     }
+    this.supersedeOlderRuns(runId, key);
     this.addedEmitter.fire({ runId, uri: base.uri, hunkIds: ids });
     this.changeEmitter.fire(runId);
     return { ok: true, hunkIds: ids };

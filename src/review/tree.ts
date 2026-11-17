@@ -75,7 +75,7 @@ export class ReviewTree implements vscode.TreeDataProvider<ReviewNode>, vscode.D
           ? "working…"
           : `${state} · ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected`;
       item.iconPath = new vscode.ThemeIcon(run?.kind === "agent" ? "hubot" : "edit");
-      item.contextValue = run?.active ? "run-active" : "run-inactive";
+      item.contextValue = !run?.active ? "run-inactive" : this.store.canApply(node.runId) ? "run-applicable" : "run-active";
       const tip = new vscode.MarkdownString();
       if (run?.instruction) {
         tip.appendText(run.instruction);

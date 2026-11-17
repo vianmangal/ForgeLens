@@ -163,7 +163,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   statusBar.name = "ForgeLens Review";
 
   const refreshStatus = () => {
-    const run = store.latestActiveRun();
+    const run = store.statusRun();
     if (!run) {
       statusBar.hide();
       return;
@@ -171,8 +171,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     const hunks = store.hunksOfRun(run.runId);
     const accepted = hunks.filter((h) => h.status === "accepted").length;
     const rejected = hunks.filter((h) => h.status === "rejected").length;
-    const canApply = run.finished && accepted > 0;
-    statusBar.text = `ForgeLens: ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected${canApply ? " · Apply" : ""}`;
+    const canApply = store.canApply(run.runId);
+    const suffix = store.hasConflict(run.runId) ? " · $(warning) file changed" : canApply ? " · Apply" : "";
+    statusBar.text = `ForgeLens: ${hunks.length} changes · ${accepted} accepted · ${rejected} rejected${suffix}`;
     statusBar.tooltip = run.instruction ?? run.label;
     statusBar.command = canApply
       ? { command: "forgelens.applyAccepted", title: "Apply accepted changes", arguments: [{ type: "run", runId: run.runId }] }
@@ -351,7 +352,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
       }),
       l.onRunFailed((f) => lastFailure.set(f.runId, f.message)),
       store.onDidRequestCancel((runId) => {
-        if (harnessRuns.has(runId)) {
+        if (harnessRuns.has(runId) && runId === lastHarnessRun) {
           void l.cancel();
         }
       })
@@ -417,6 +418,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
           ? "ForgeLens: run cancelled. No files were changed by it."
           : "ForgeLens: this run had already finished or been applied, so there was nothing to cancel.");
       }
+    }),
+    vscode.commands.registerCommand("forgelens.clearFinishedRuns", () => {
+      store.clearInactive();
     }),
     vscode.commands.registerCommand("forgelens.undoLastApply", async () => {
       vscode.window.showInformationMessage(`ForgeLens: ${await applier.undoLastApply()}`);

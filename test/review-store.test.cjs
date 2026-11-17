@@ -199,8 +199,11 @@ test("conflict flags only apply to active runs and are cleared when a run is app
   const store = new ReviewStore();
   const applied = store.createRun("agent", "t", "run-n");
   const dropped = store.createRun("agent", "t", "run-o");
-  const [h1] = twoHunks(store, applied.runId, "file:///h.py");
+  const [h1, h2] = twoHunks(store, applied.runId, "file:///h.py");
+  store.decide(h1, "accepted");
+  store.decide(h2, "rejected");
   twoHunks(store, dropped.runId, "file:///h.py");
+  assert.equal(store.getRun(applied.runId).active, true);
   store.refreshConflicts(doc("file:///h.py", "changed\n" + text, 2));
   assert.equal(store.isConflicted(applied.runId, Uri.parse("file:///h.py")), true);
   assert.equal(store.isConflicted(dropped.runId, Uri.parse("file:///h.py")), true);
@@ -238,4 +241,82 @@ test("a rejected hunk no longer blocks a new proposal on the same lines, but a p
   assert.equal(retry.ok, true);
   assert.equal(store.getHunk(first2.hunkIds[0]).status, "rejected");
   assert.equal(store.hunksOfRun(other.runId).length, 2);
+});
+
+const anchorEdit = (store, runId, uri, newText) => {
+  const snap = store.captureSnapshot(doc(uri, text));
+  return store.propose(runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText });
+};
+
+test("a new run proposing on a file cancels older active runs with undecided hunks there", () => {
+  const store = new ReviewStore();
+  const cancelled = [];
+  store.onDidRequestCancel(id => cancelled.push(id));
+  const pending = store.createRun("inline", "t", "run-s1");
+  anchorEdit(store, pending.runId, "file:///s.py", "b = 1");
+  const decided = store.createRun("inline", "t", "run-s2");
+  const d = anchorEdit(store, decided.runId, "file:///s.py", "b = 3");
+  store.decide(d.hunkIds[0], "accepted");
+  const elsewhere = store.createRun("inline", "t", "run-s3");
+  anchorEdit(store, elsewhere.runId, "file:///other.py", "b = 4");
+  const fresh = store.createRun("inline", "t", "run-s4");
+  assert.equal(anchorEdit(store, fresh.runId, "file:///s.py", "b = 5").ok, true);
+  assert.deepEqual(cancelled, ["run-s1"]);
+  assert.equal(store.getRun(pending.runId).active, false);
+  assert.equal(store.getRun(decided.runId).active, true);
+  assert.equal(store.getRun(elsewhere.runId).active, true);
+  assert.equal(store.getRun(fresh.runId).active, true);
+  assert.equal(store.liveHunksForUri(Uri.parse("file:///s.py")).filter(h => h.status === "proposed").length, 1);
+});
+
+test("canApply needs an active finished run with an accepted hunk and no conflicted file", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-t");
+  const [h1, h2] = twoHunks(store, run.runId, "file:///t.py");
+  store.markFinished(run.runId);
+  assert.equal(store.canApply(run.runId), false);
+  store.decide(h1, "accepted");
+  assert.equal(store.canApply(run.runId), true);
+  store.refreshConflicts(doc("file:///t.py", "x\n" + text, 2));
+  assert.equal(store.hasConflict(run.runId), true);
+  assert.equal(store.canApply(run.runId), false);
+  store.refreshConflicts(doc("file:///t.py", text, 3));
+  assert.equal(store.canApply(run.runId), true);
+  store.decide(h2, "rejected");
+  store.markApplied(run.runId, [h1]);
+  assert.equal(store.canApply(run.runId), false);
+});
+
+test("statusRun prefers the newest active run that still has pending or accepted hunks", () => {
+  const store = new ReviewStore();
+  const older = store.createRun("inline", "t", "run-u1");
+  twoHunks(store, older.runId, "file:///u1.py");
+  const newer = store.createRun("inline", "t", "run-u2");
+  const [n1, n2] = twoHunks(store, newer.runId, "file:///u2.py");
+  assert.equal(store.statusRun().runId, "run-u2");
+  store.decide(n1, "rejected");
+  store.decide(n2, "rejected");
+  assert.equal(store.statusRun().runId, "run-u1");
+  store.invalidateRun(older.runId);
+  assert.equal(store.statusRun().runId, "run-u2");
+  store.invalidateRun(newer.runId);
+  assert.equal(store.statusRun(), undefined);
+});
+
+test("clearInactive removes applied, cancelled and invalidated runs and keeps active ones", () => {
+  const store = new ReviewStore();
+  const applied = store.createRun("inline", "t", "run-v1");
+  const [a1] = twoHunks(store, applied.runId, "file:///v1.py");
+  store.decide(a1, "accepted");
+  store.markApplied(applied.runId, [a1]);
+  const cancelled = store.createRun("inline", "t", "run-v2");
+  twoHunks(store, cancelled.runId, "file:///v2.py");
+  store.requestCancel(cancelled.runId);
+  const active = store.createRun("inline", "t", "run-v3");
+  const [k1] = twoHunks(store, active.runId, "file:///v3.py");
+  assert.equal(store.clearInactive(), 2);
+  assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-v3"]);
+  assert.equal(store.getHunk(a1), undefined);
+  assert.equal(store.getHunk(k1).status, "proposed");
+  assert.equal(store.clearInactive(), 0);
 });

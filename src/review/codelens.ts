@@ -58,7 +58,7 @@ export class HunkCodeLensProvider implements vscode.CodeLensProvider, vscode.Dis
       const range = new vscode.Range(line, 0, line, 0);
       const conflict = this.store.isConflicted(h.runId, target);
       lenses.push(new vscode.CodeLens(range, {
-        title: `$(diff) ForgeLens ${index + 1}/${hunks.length} · ${sizeLabel(h)}`,
+        title: `ForgeLens ${index + 1}/${hunks.length} · ${sizeLabel(h)}`,
         command: "forgelens.openHunkDiff",
         arguments: [h.id]
       }));

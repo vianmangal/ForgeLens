@@ -149,6 +149,25 @@ test("undo keeps an edit made while another file is opening", async () => {
   assert.equal(docs.get("file:///a.py").text, after + "# mine\n");
 });
 
+test("a hunk accepted during the confirmation prompt is written, marked applied and counted together", async () => {
+  const { store, applier, runId, ids } = setup();
+  store.decide(ids[0], "accepted");
+  store.markFinished(runId);
+  const prompt = fake.window.showWarningMessage;
+  fake.window.showWarningMessage = async () => { store.decide(ids[1], "accepted"); return "Apply accepted only"; };
+  try {
+    const outcome = await applier.applyAccepted(runId);
+    assert.equal(outcome.applied, true);
+    assert.equal(outcome.hunkCount, 2);
+    assert.equal(applied[0].edits.length, 2);
+    assert.equal(store.getHunk(ids[0]).status, "applied");
+    assert.equal(store.getHunk(ids[1]).status, "applied");
+    assert.equal(store.getHunk(ids[2]).status, "invalidated");
+  } finally {
+    fake.window.showWarningMessage = prompt;
+  }
+});
+
 test("fake dev edit keeps CRLF lines intact", () => {
   assert.equal(fakeEditText("  a\r\n  b\r\n"), "  a\n  FORGELENS_DEMO_INSERTED_LINE\n  b FORGELENS_DEMO_EDIT");
   assert.equal(fakeEditText("  a\n  b\n"), "  a\n  FORGELENS_DEMO_INSERTED_LINE\n  b FORGELENS_DEMO_EDIT");

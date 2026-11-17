@@ -59,12 +59,12 @@
       {
         "command": "forgelens.acceptAll",
         "title": "ForgeLens: Accept All Changes",
-        "icon": "$(pass-filled)"
+        "icon": "$(check-all)"
       },
       {
         "command": "forgelens.rejectAll",
         "title": "ForgeLens: Reject All Changes",
-        "icon": "$(circle-slash)"
+        "icon": "$(close-all)"
       },
       {
         "command": "forgelens.openHunkDiff",
@@ -73,8 +73,8 @@
       },
       {
         "command": "forgelens.applyAccepted",
-        "title": "ForgeLens: Apply Accepted Changes",
-        "icon": "$(check-all)"
+        "title": "ForgeLens: Apply Accepted Changes to Files",
+        "icon": "$(save-all)"
       },
       {
         "command": "forgelens.cancelRun",
@@ -85,6 +85,11 @@
         "command": "forgelens.undoLastApply",
         "title": "ForgeLens: Undo Last Apply",
         "icon": "$(discard)"
+      },
+      {
+        "command": "forgelens.clearFinishedRuns",
+        "title": "ForgeLens: Clear Finished Runs",
+        "icon": "$(clear-all)"
       },
       {
         "command": "forgelens.dev.fakeProposal",
@@ -158,22 +163,22 @@
         },
         {
           "command": "forgelens.acceptAll",
-          "when": "view == forgelens.review && viewItem == run-active",
+          "when": "view == forgelens.review && viewItem =~ /^run-(active|applicable)$/",
           "group": "inline@1"
         },
         {
           "command": "forgelens.rejectAll",
-          "when": "view == forgelens.review && viewItem == run-active",
+          "when": "view == forgelens.review && viewItem =~ /^run-(active|applicable)$/",
           "group": "inline@2"
         },
         {
           "command": "forgelens.applyAccepted",
-          "when": "view == forgelens.review && viewItem == run-active",
+          "when": "view == forgelens.review && viewItem == run-applicable",
           "group": "inline@3"
         },
         {
           "command": "forgelens.cancelRun",
-          "when": "view == forgelens.review && viewItem == run-active",
+          "when": "view == forgelens.review && viewItem =~ /^run-(active|applicable)$/",
           "group": "inline@4"
         }
       ],
@@ -181,7 +186,12 @@
         {
           "command": "forgelens.undoLastApply",
           "when": "view == forgelens.review",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "forgelens.clearFinishedRuns",
+          "when": "view == forgelens.review",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
