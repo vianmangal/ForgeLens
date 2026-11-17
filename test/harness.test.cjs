@@ -228,6 +228,31 @@ for (const [message, kind] of [["401 invalid key", "auth"], ["HTTP 503", "server
   });
 }
 
+for (const [message, kind] of [
+  ["API key not valid. Please pass a valid API key.", "auth"],
+  ["API KEY IS NOT VALID", "auth"],
+  ["Request argument is not valid", "tool"],
+  ["API key valid, but request argument is not valid", "tool"]
+]) {
+  for (const source of ["terminal", "http"]) {
+    test(`classifies Gemini-style 400 errors (${source}): ${message}`, async () => {
+      const { harness, observed } = fixture({
+        createTurnStream: async () => {
+          if (source === "http") throw Object.assign(new Error(message), { statusCode: 400 });
+          return events(created(), done("error", { message: "400: " + message }));
+        }
+      });
+      const finish = await harness.startRun("p/m", "hello");
+      assert.deepEqual(observed.failures, [{
+        runId: finish.runId, model: "p/m", kind,
+        message: source === "http" ? message : "400: " + message
+      }]);
+      assert.deepEqual(observed.invalidate, [finish.runId]);
+      assert.equal(finish.status, "failed");
+    });
+  }
+}
+
 test("a review left pending resumes the same turn", async () => {
   const waiting = deferred();
   const decisions = [];

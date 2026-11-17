@@ -62,7 +62,7 @@ class Run {
 function failureKind(error: unknown, message: string): Failure["kind"] {
   const status = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
   const description = String(status ?? "") + " " + message;
-  if (/\b(401|403|unauthorized|forbidden|authentication)\b|invalid.{0,12}(api.?key|credential)/i.test(description)) return "auth";
+  if (/\b(401|403|unauthorized|forbidden|authentication)\b|invalid.{0,12}(api.?key|credential)|\bapi.?key\s+(?:is\s+)?not\s+valid\b/i.test(description)) return "auth";
   if (/\b(429|5\d\d)\b|rate limit|internal server error|service unavailable|bad gateway/i.test(description)) return "server";
   if (/network|fetch failed|failed to fetch|connection|socket|timed?\s*out|timeout|ECONN|ENOTFOUND|EAI_AGAIN|stream ended/i.test(description)) return "network";
   return "tool";
