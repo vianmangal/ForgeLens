@@ -28,7 +28,7 @@ export class Applier {
   constructor(private readonly store: ReviewStore) {}
 
   applyAccepted(runId: RunId, options: { confirmUndecided?: boolean } = {}): Promise<ApplyOutcome> {
-    return this.store.serialize(() => this.doApply(runId, options.confirmUndecided ?? true));
+    return this.doApply(runId, options.confirmUndecided ?? true);
   }
 
   private async doApply(runId: RunId, confirmUndecided: boolean): Promise<ApplyOutcome> {
@@ -73,56 +73,58 @@ export class Applier {
     for (const key of byUri.keys()) {
       documents.set(key, await vscode.workspace.openTextDocument(vscode.Uri.parse(key)));
     }
-    if (!this.store.getRun(runId)?.active || accepted.some((h) => h.status !== "accepted")) {
-      return empty("This run was cancelled or invalidated before the edit was written, so nothing was applied.");
-    }
-    const conflicts: string[] = [];
-    for (const [key, document] of documents) {
-      const base = this.store.baseOf(runId, document.uri);
-      if (!base || hashText(document.getText()) !== base.contentHash) {
-        conflicts.push(vscode.workspace.asRelativePath(vscode.Uri.parse(key), false));
+    return this.store.serialize(async () => {
+      if (!this.store.getRun(runId)?.active || accepted.some((h) => h.status !== "accepted")) {
+        return empty("This run was cancelled or invalidated before the edit was written, so nothing was applied.");
       }
-    }
-    if (conflicts.length > 0) {
-      return {
-        applied: false,
-        files: [],
-        hunkCount: 0,
-        conflicts,
-        message: `Nothing was applied: ${conflicts.join(", ")} changed after the proposal was made. Your edits were kept. Ask ForgeLens again to get a fresh proposal.`
-      };
-    }
+      const conflicts: string[] = [];
+      for (const [key, document] of documents) {
+        const base = this.store.baseOf(runId, document.uri);
+        if (!base || hashText(document.getText()) !== base.contentHash) {
+          conflicts.push(vscode.workspace.asRelativePath(vscode.Uri.parse(key), false));
+        }
+      }
+      if (conflicts.length > 0) {
+        return {
+          applied: false,
+          files: [],
+          hunkCount: 0,
+          conflicts,
+          message: `Nothing was applied: ${conflicts.join(", ")} changed after the proposal was made. Your edits were kept. Ask ForgeLens again to get a fresh proposal.`
+        };
+      }
 
-    const edit = new vscode.WorkspaceEdit();
-    const files: AppliedFile[] = [];
-    for (const [key, list] of byUri) {
-      const document = documents.get(key)!;
-      const base = this.store.baseOf(runId, document.uri)!;
-      const offsets = lineStartOffsets(base.text);
-      for (const h of list) {
-        const { start, end } = hunkOffsets(base.text, h, offsets);
-        edit.replace(document.uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), h.newText);
+      const edit = new vscode.WorkspaceEdit();
+      const files: AppliedFile[] = [];
+      for (const [key, list] of byUri) {
+        const document = documents.get(key)!;
+        const base = this.store.baseOf(runId, document.uri)!;
+        const offsets = lineStartOffsets(base.text);
+        for (const h of list) {
+          const { start, end } = hunkOffsets(base.text, h, offsets);
+          edit.replace(document.uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), h.newText);
+        }
+        files.push({ uri: document.uri, before: base.text, afterHash: "" });
       }
-      files.push({ uri: document.uri, before: base.text, afterHash: "" });
-    }
-    const ok = await vscode.workspace.applyEdit(edit);
-    if (!ok) {
-      return empty("VS Code refused the edit, so nothing was applied.");
-    }
-    for (const f of files) {
-      const document = documents.get(f.uri.toString())!;
-      f.afterHash = hashText(document.getText());
-    }
-    this.last = { runId, files };
-    this.store.markApplied(runId, accepted.map((h) => h.id));
-    const names = files.map((f) => vscode.workspace.asRelativePath(f.uri, false));
-    return {
-      applied: true,
-      files: names,
-      hunkCount: accepted.length,
-      conflicts: [],
-      message: `Applied ${accepted.length} change(s) in ${names.length} file(s): ${names.join(", ")}. Files are not saved yet. Undo with Ctrl+Z or "ForgeLens: Undo Last Apply".`
-    };
+      const ok = await vscode.workspace.applyEdit(edit);
+      if (!ok) {
+        return empty("VS Code refused the edit, so nothing was applied.");
+      }
+      for (const f of files) {
+        const document = documents.get(f.uri.toString())!;
+        f.afterHash = hashText(document.getText());
+      }
+      this.last = { runId, files };
+      this.store.markApplied(runId, accepted.map((h) => h.id));
+      const names = files.map((f) => vscode.workspace.asRelativePath(f.uri, false));
+      return {
+        applied: true,
+        files: names,
+        hunkCount: accepted.length,
+        conflicts: [],
+        message: `Applied ${accepted.length} change(s) in ${names.length} file(s): ${names.join(", ")}. Files are not saved yet. Undo with Ctrl+Z or "ForgeLens: Undo Last Apply".`
+      };
+    });
   }
 
   undoLastApply(): Promise<string> {

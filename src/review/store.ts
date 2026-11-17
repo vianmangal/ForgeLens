@@ -21,6 +21,12 @@ export interface RunReview {
   baseByUri: Map<string, string>;
 }
 
+export interface CancelOutcome {
+  cancelled: boolean;
+  alreadyApplied: boolean;
+  message: string;
+}
+
 export type Decision = "accepted" | "rejected";
 
 export interface DecisionEvent {
@@ -344,40 +350,47 @@ export class ReviewStore implements vscode.Disposable {
     }
   }
 
-  closeIfEmpty(runId: RunId): boolean {
-    const run = this.runs.get(runId);
-    if (!run || !run.active || run.order.length > 0) {
-      return false;
-    }
-    this.invalidateRun(runId);
-    return true;
+  closeIfEmpty(runId: RunId): Promise<boolean> {
+    return this.serialize(async () => {
+      const run = this.runs.get(runId);
+      if (!run || !run.active || run.order.length > 0) {
+        return false;
+      }
+      return this.invalidateUnlocked(runId).cancelled;
+    });
   }
 
-  requestCancel(runId: RunId): boolean {
+  requestCancel(runId: RunId): Promise<CancelOutcome> {
+    return this.serialize(async () => {
+      const outcome = this.invalidateUnlocked(runId);
+      if (outcome.cancelled) {
+        this.cancelEmitter.fire(runId);
+      }
+      return outcome;
+    });
+  }
+
+  invalidateRun(runId: RunId): Promise<CancelOutcome> {
+    return this.serialize(async () => this.invalidateUnlocked(runId));
+  }
+
+  private invalidateUnlocked(runId: RunId): CancelOutcome {
     const run = this.runs.get(runId);
+    if (this.hunksOfRun(runId).some((h) => h.status === "applied")) {
+      return { cancelled: false, alreadyApplied: true, message: "Changes were already applied; use Undo" };
+    }
     if (!run || !run.active) {
-      return false;
-    }
-    this.invalidateRun(runId);
-    this.cancelEmitter.fire(runId);
-    return true;
-  }
-
-  invalidateRun(runId: RunId): void {
-    const run = this.runs.get(runId);
-    if (!run) {
-      return;
+      return { cancelled: false, alreadyApplied: false, message: "This run is no longer active; there was nothing to cancel." };
     }
     run.active = false;
     run.bulk = undefined;
     this.clearConflicts(runId);
     for (const hunk of this.hunksOfRun(runId)) {
       this.queued.delete(hunk.id);
-      if (hunk.status !== "applied") {
-        hunk.status = "invalidated";
-      }
+      hunk.status = "invalidated";
     }
     this.changeEmitter.fire(runId);
+    return { cancelled: true, alreadyApplied: false, message: "Run cancelled. No files were changed by it." };
   }
 
   markApplied(runId: RunId, hunkIds: HunkId[]): void {

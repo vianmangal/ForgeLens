@@ -172,3 +172,55 @@ test("fake dev edit keeps CRLF lines intact", () => {
   assert.equal(fakeEditText("  a\r\n  b\r\n"), "  a\n  FORGELENS_DEMO_INSERTED_LINE\n  b FORGELENS_DEMO_EDIT");
   assert.equal(fakeEditText("  a\n  b\n"), "  a\n  FORGELENS_DEMO_INSERTED_LINE\n  b FORGELENS_DEMO_EDIT");
 });
+
+for (const method of ["requestCancel", "invalidateRun"]) {
+  test(`${method} before Apply prevents edit submission`, async () => {
+    const { store, applier, runId, ids } = setup();
+    ids.forEach(id => store.decide(id, "accepted"));
+    store.markFinished(runId);
+    const cancellation = store[method](runId);
+    const applying = applier.applyAccepted(runId);
+    assert.equal((await cancellation).cancelled, true);
+    assert.equal((await applying).applied, false);
+    assert.equal(applied.length, 0);
+    for (const doc of docs.values()) assert.equal(doc.text, text);
+  });
+
+  test(`${method} waits for a pending applyEdit and reports already applied`, async () => {
+    const { store, applier, runId, ids } = setup();
+    ids.forEach(id => store.decide(id, "accepted"));
+    store.markFinished(runId);
+    const original = fake.workspace.applyEdit;
+    let submitted;
+    const started = new Promise(resolve => { submitted = resolve; });
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    fake.workspace.applyEdit = async edit => {
+      submitted();
+      await pending;
+      return original(edit);
+    };
+    try {
+      const applying = applier.applyAccepted(runId);
+      await started;
+      let settled = false;
+      const cancellation = store[method](runId).then(outcome => { settled = true; return outcome; });
+      await Promise.resolve();
+      assert.equal(settled, false);
+      assert.equal(store.getHunk(ids[0]).status, "accepted");
+      release();
+      assert.equal((await applying).applied, true);
+      assert.deepEqual(await cancellation, {
+        cancelled: false,
+        alreadyApplied: true,
+        message: "Changes were already applied; use Undo"
+      });
+      assert.equal(applied.length, 1);
+      for (const id of ids) assert.equal(store.getHunk(id).status, "applied");
+      for (const doc of docs.values()) assert.equal(doc.text, text.replace("b = 2", "b = 3"));
+    } finally {
+      release();
+      fake.workspace.applyEdit = original;
+    }
+  });
+}

@@ -184,7 +184,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   const markRunFinished = (runId: RunId) => {
     store.markFinished(runId);
     store.clearBulkChoice(runId);
-    store.closeIfEmpty(runId);
+    void store.closeIfEmpty(runId);
     refreshStatus();
     void maybePromptApply(runId);
   };
@@ -291,7 +291,11 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
         ];
         token.onCancellationRequested(() => {
           if (runId) {
-            store.requestCancel(runId);
+            void store.requestCancel(runId).then((outcome) => {
+              if (outcome.alreadyApplied) {
+                vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`);
+              }
+            });
           }
         });
         try {
@@ -346,9 +350,11 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
       }),
       l.onDecision((e) => store.decide(e.hunkId, e.allowed ? "accepted" : "rejected")),
       l.onInvalidate((runId) => {
-        if (store.getRun(runId)?.active) {
-          store.invalidateRun(runId);
-        }
+        void store.invalidateRun(runId).then((outcome) => {
+          if (outcome.alreadyApplied) {
+            vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`);
+          }
+        });
       }),
       l.onRunFailed((f) => lastFailure.set(f.runId, f.message)),
       store.onDidRequestCancel((runId) => {
@@ -413,10 +419,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     vscode.commands.registerCommand("forgelens.cancelRun", async (arg: unknown) => {
       const runId = await pickRun(arg);
       if (runId) {
-        const cancelled = await store.serialize(async () => store.requestCancel(runId));
-        vscode.window.showInformationMessage(cancelled
-          ? "ForgeLens: run cancelled. No files were changed by it."
-          : "ForgeLens: this run had already finished or been applied, so there was nothing to cancel.");
+        const outcome = await store.requestCancel(runId);
+        vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`);
+        return outcome;
       }
     }),
     vscode.commands.registerCommand("forgelens.clearFinishedRuns", () => {

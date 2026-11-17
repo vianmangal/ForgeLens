@@ -42,7 +42,7 @@ test("harness-style flow: request, queue, decide, apply", () => {
   assert.equal(store.getRun(run.runId).active, false);
 });
 
-test("cancel invalidates pending hunks and blocks late proposals", () => {
+test("cancel invalidates pending hunks and blocks late proposals", async () => {
   const store = new ReviewStore();
   let cancelled = "";
   store.onDidRequestCancel(id => { cancelled = id; });
@@ -50,7 +50,7 @@ test("cancel invalidates pending hunks and blocks late proposals", () => {
   const snap = store.captureSnapshot(doc("file:///y.py", text));
   const res = store.propose(run.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 22" });
   store.markQueued(res.hunkIds[0]);
-  store.requestCancel(run.runId);
+  await store.requestCancel(run.runId);
   assert.equal(cancelled, run.runId);
   assert.equal(store.getHunk(res.hunkIds[0]).status, "invalidated");
   assert.equal(store.isQueued(res.hunkIds[0]), false);
@@ -117,7 +117,7 @@ test("pendingHunkIds filters by status and skips queued hunks", () => {
   assert.deepEqual(store.pendingHunkIds(run.runId), [h2]);
 });
 
-test("bulk choice is remembered while active and cleared on invalidate or apply", () => {
+test("bulk choice is remembered while active and cleared on invalidate or apply", async () => {
   const store = new ReviewStore();
   const run = store.createRun("agent", "t", "run-d");
   assert.equal(store.getBulkChoice(run.runId), undefined);
@@ -127,7 +127,7 @@ test("bulk choice is remembered while active and cleared on invalidate or apply"
   assert.equal(store.getBulkChoice(run.runId), undefined);
 
   store.setBulkChoice(run.runId, "rejected");
-  store.invalidateRun(run.runId);
+  await store.invalidateRun(run.runId);
   assert.equal(store.getBulkChoice(run.runId), undefined);
   assert.equal(store.setBulkChoice(run.runId, "accepted"), false);
 
@@ -152,7 +152,7 @@ test("a later approval request can be decided with the remembered bulk choice", 
   assert.equal(store.getHunk(h2).status, "proposed");
 });
 
-test("visibleRuns hides inactive runs without hunks and latestActiveRun picks the newest active one", () => {
+test("visibleRuns hides inactive runs without hunks and latestActiveRun picks the newest active one", async () => {
   const store = new ReviewStore();
   const empty = store.createRun("inline", "empty", "run-g");
   const full = store.createRun("inline", "full", "run-h");
@@ -160,11 +160,11 @@ test("visibleRuns hides inactive runs without hunks and latestActiveRun picks th
   const working = store.createRun("agent", "working", "run-i");
   assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-i", "run-h", "run-g"]);
   assert.equal(store.latestActiveRun().runId, "run-i");
-  store.invalidateRun(empty.runId);
-  store.invalidateRun(working.runId);
+  await store.invalidateRun(empty.runId);
+  await store.invalidateRun(working.runId);
   assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-h"]);
   assert.equal(store.latestActiveRun().runId, "run-h");
-  store.invalidateRun(full.runId);
+  await store.invalidateRun(full.runId);
   assert.equal(store.latestActiveRun(), undefined);
   assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-h"]);
 });
@@ -181,21 +181,21 @@ test("runs keep their instruction and labels use the first 50 characters", () =>
   assert.equal(store.createRun("agent", "x", "run-k").instruction, undefined);
 });
 
-test("closeIfEmpty closes a finished run with no changes and leaves others alone", () => {
+test("closeIfEmpty closes a finished run with no changes and leaves others alone", async () => {
   const store = new ReviewStore();
   const empty = store.createRun("agent", "t", "run-l");
   const full = store.createRun("agent", "t", "run-m");
   twoHunks(store, full.runId, "file:///g.py");
-  assert.equal(store.closeIfEmpty(full.runId), false);
+  assert.equal(await store.closeIfEmpty(full.runId), false);
   assert.equal(store.getRun(full.runId).active, true);
-  assert.equal(store.closeIfEmpty(empty.runId), true);
+  assert.equal(await store.closeIfEmpty(empty.runId), true);
   assert.equal(store.getRun(empty.runId).active, false);
-  assert.equal(store.closeIfEmpty(empty.runId), false);
+  assert.equal(await store.closeIfEmpty(empty.runId), false);
   assert.deepEqual(store.visibleRuns().map(r => r.runId), ["run-m"]);
-  assert.equal(store.closeIfEmpty("missing"), false);
+  assert.equal(await store.closeIfEmpty("missing"), false);
 });
 
-test("conflict flags only apply to active runs and are cleared when a run is applied or invalidated", () => {
+test("conflict flags only apply to active runs and are cleared when a run is applied or invalidated", async () => {
   const store = new ReviewStore();
   const applied = store.createRun("agent", "t", "run-n");
   const dropped = store.createRun("agent", "t", "run-o");
@@ -208,20 +208,20 @@ test("conflict flags only apply to active runs and are cleared when a run is app
   assert.equal(store.isConflicted(applied.runId, Uri.parse("file:///h.py")), true);
   assert.equal(store.isConflicted(dropped.runId, Uri.parse("file:///h.py")), true);
   store.markApplied(applied.runId, [h1]);
-  store.invalidateRun(dropped.runId);
+  await store.invalidateRun(dropped.runId);
   assert.equal(store.isConflicted(applied.runId, Uri.parse("file:///h.py")), false);
   assert.equal(store.isConflicted(dropped.runId, Uri.parse("file:///h.py")), false);
 });
 
-test("requestCancel reports whether it cancelled anything and markFinished sets the flag", () => {
+test("requestCancel reports whether it cancelled anything and markFinished sets the flag", async () => {
   const store = new ReviewStore();
   const run = store.createRun("agent", "t", "run-p");
   assert.equal(store.getRun(run.runId).finished, false);
   store.markFinished(run.runId);
   assert.equal(store.getRun(run.runId).finished, true);
-  assert.equal(store.requestCancel(run.runId), true);
-  assert.equal(store.requestCancel(run.runId), false);
-  assert.equal(store.requestCancel("missing"), false);
+  assert.equal((await store.requestCancel(run.runId)).cancelled, true);
+  assert.equal((await store.requestCancel(run.runId)).cancelled, false);
+  assert.equal((await store.requestCancel("missing")).cancelled, false);
 });
 
 test("a rejected hunk no longer blocks a new proposal on the same lines, but a pending or accepted one does", () => {
@@ -248,7 +248,7 @@ const anchorEdit = (store, runId, uri, newText) => {
   return store.propose(runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText });
 };
 
-test("a new run proposing on a file cancels older active runs with undecided hunks there", () => {
+test("a new run proposing on a file cancels older active runs with undecided hunks there", async () => {
   const store = new ReviewStore();
   const cancelled = [];
   store.onDidRequestCancel(id => cancelled.push(id));
@@ -261,6 +261,7 @@ test("a new run proposing on a file cancels older active runs with undecided hun
   anchorEdit(store, elsewhere.runId, "file:///other.py", "b = 4");
   const fresh = store.createRun("inline", "t", "run-s4");
   assert.equal(anchorEdit(store, fresh.runId, "file:///s.py", "b = 5").ok, true);
+  await store.serialize(async () => {});
   assert.deepEqual(cancelled, ["run-s1"]);
   assert.equal(store.getRun(pending.runId).active, false);
   assert.equal(store.getRun(decided.runId).active, true);
@@ -287,7 +288,7 @@ test("canApply needs an active finished run with an accepted hunk and no conflic
   assert.equal(store.canApply(run.runId), false);
 });
 
-test("statusRun prefers the newest active run that still has pending or accepted hunks", () => {
+test("statusRun prefers the newest active run that still has pending or accepted hunks", async () => {
   const store = new ReviewStore();
   const older = store.createRun("inline", "t", "run-u1");
   twoHunks(store, older.runId, "file:///u1.py");
@@ -297,13 +298,13 @@ test("statusRun prefers the newest active run that still has pending or accepted
   store.decide(n1, "rejected");
   store.decide(n2, "rejected");
   assert.equal(store.statusRun().runId, "run-u1");
-  store.invalidateRun(older.runId);
+  await store.invalidateRun(older.runId);
   assert.equal(store.statusRun().runId, "run-u2");
-  store.invalidateRun(newer.runId);
+  await store.invalidateRun(newer.runId);
   assert.equal(store.statusRun(), undefined);
 });
 
-test("clearInactive removes applied, cancelled and invalidated runs and keeps active ones", () => {
+test("clearInactive removes applied, cancelled and invalidated runs and keeps active ones", async () => {
   const store = new ReviewStore();
   const applied = store.createRun("inline", "t", "run-v1");
   const [a1] = twoHunks(store, applied.runId, "file:///v1.py");
@@ -311,7 +312,7 @@ test("clearInactive removes applied, cancelled and invalidated runs and keeps ac
   store.markApplied(applied.runId, [a1]);
   const cancelled = store.createRun("inline", "t", "run-v2");
   twoHunks(store, cancelled.runId, "file:///v2.py");
-  store.requestCancel(cancelled.runId);
+  await store.requestCancel(cancelled.runId);
   const active = store.createRun("inline", "t", "run-v3");
   const [k1] = twoHunks(store, active.runId, "file:///v3.py");
   assert.equal(store.clearInactive(), 2);
