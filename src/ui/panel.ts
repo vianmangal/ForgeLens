@@ -34,7 +34,7 @@ export class AgentPanel {
       <form id="form"><label for="task">Repository task</label><textarea id="task" required rows="3"></textarea>
       <button id="run">Run task</button><button id="cancel" type="button" hidden>Cancel run</button></form>
       <p id="status" role="status"></p><p id="error" role="alert"></p><section id="approvals" aria-label="Hunk approvals"></section>
-      <pre id="reply" aria-label="Agent reply"></pre></main><script nonce="${nonce}" src="${script}"></script></body></html>`;
+      <section id="reply-section" hidden><h2>Model reply</h2><pre id="reply"></pre></section></main><script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => { this.panel = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
       try {

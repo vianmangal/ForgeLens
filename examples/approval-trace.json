@@ -1,0 +1,59 @@
+{
+  "sessionId": "01m7n2wr0vefdme7dhwkffzbyz",
+  "format": "Selected fields from persisted SDK events in their original order",
+  "events": [
+    {
+      "toolCallId": "call_jbrgi6gp",
+      "content": "{\"hunkIds\":[\"h-248c6507dd\"]}",
+      "type": "tool.response",
+      "id": "01m7n2x33aw6drawcddy7xcqzt",
+      "createdAt": "2026-11-17T15:44:41.577Z",
+      "threadId": "main"
+    },
+    {
+      "type": "model.message",
+      "id": "01m7n2x33aw6drawcddy7xcqzv",
+      "threadId": "main",
+      "toolCalls": [
+        {
+          "toolInfo": {
+            "type": "mcp",
+            "name": "approve_hunk",
+            "serverId": "forgelens-proof",
+            "serverName": "forgelens-proof"
+          },
+          "id": "call_g4029gus",
+          "type": "function",
+          "function": {
+            "name": "approve_hunk",
+            "arguments": "{\"hunkId\":\"h-248c6507dd\"}"
+          }
+        }
+      ],
+      "createdAt": "2026-11-17T15:44:47.817Z"
+    },
+    {
+      "type": "tool.approval_required",
+      "id": "01m7n2x96awmfvxr3ecr23zkzz",
+      "createdAt": "2026-11-17T15:44:47.818Z",
+      "threadId": "main",
+      "toolCalls": [
+        {
+          "id": "call_g4029gus",
+          "sourceEventId": "01m7n2x33aw6drawcddy7xcqzv"
+        }
+      ]
+    },
+    {
+      "type": "user.tool_approval",
+      "threadId": "main",
+      "toolCallId": "call_g4029gus",
+      "approval": {
+        "status": "deny",
+        "reason": "Developer declined this fixture hunk."
+      },
+      "id": "01m7n2x96yq9bw80q64v4je7bx",
+      "createdAt": "2026-11-17T15:44:47.838Z"
+    }
+  ]
+}

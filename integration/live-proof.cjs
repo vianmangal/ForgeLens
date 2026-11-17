@@ -5,7 +5,7 @@ const { setTimeout: wait } = require("node:timers/promises");
 
 exports.run = async function () {
   const suppliedMode = process.env.FORGELENS_PROOF_CASE;
-  const modes = suppliedMode ? [suppliedMode] : ["deny", "allow", "cancel"];
+  const modes = suppliedMode ? [suppliedMode] : ["deny", "allow", "cancel", "cancel-stream"];
   const delay = Number(process.env.FORGELENS_APPROVAL_WAIT_MS ?? 300000);
   const ext = vscode.extensions.getExtension("forgelens-team.forgelens");
   const api = await ext.activate();
@@ -21,7 +21,7 @@ exports.run = async function () {
   const fixture = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, "proof.txt").fsPath;
   const before = await readFile(fixture, "utf8");
   for (const mode of modes) {
-    assert.ok(["deny", "allow", "cancel"].includes(mode));
+    assert.ok(["deny", "allow", "cancel", "cancel-stream"].includes(mode));
     let text = "", approvals = 0, decided = false, cancelled = false, late = 0;
     let operation = Promise.resolve();
     const subs = [
@@ -35,11 +35,18 @@ exports.run = async function () {
           if (mode === "cancel") {
             cancelled = true;
             await api.cancel();
-          } else if (mode === "allow") decided = api.approve(hunkId);
+          } else if (mode === "allow" || mode === "cancel-stream") decided = api.approve(hunkId);
           else decided = api.reject(hunkId, "Developer declined this fixture hunk.");
         })();
       }),
-      api.onDelta(event => { if (cancelled) late++; text += event.text; }),
+      api.onDelta(event => {
+        if (cancelled) { late++; return; }
+        text += event.text;
+        if (mode === "cancel-stream" && event.text) {
+          cancelled = true;
+          operation = api.cancel();
+        }
+      }),
       api.onRunFailed(event => console.log("PROOF classification", event.kind, event.message))
     ];
     try {
@@ -56,13 +63,14 @@ exports.run = async function () {
         tools: names, answers, approvals, late, streamedCharacters: text.length,
         waitMs: mode === "allow" ? delay : 0 };
       console.log("PROOF result", JSON.stringify(result));
-      assert.ok(names.includes("read_range") && names.includes("propose_edit") && names.includes("approve_hunk"));
-      assert.ok(log.some(e => e.type === "tool.response" && e.content.includes("The copper owl counted seven bells.")));
-      assert.equal(approvals, 1);
+      if (mode !== "cancel-stream") assert.ok(names.includes("read_range") && names.includes("propose_edit") && names.includes("approve_hunk"));
+      if (mode !== "cancel-stream") assert.ok(log.some(e => e.type === "tool.response" && e.content.includes("The copper owl counted seven bells.")));
+      if (mode !== "cancel-stream") assert.equal(approvals, 1);
       assert.equal(await readFile(fixture, "utf8"), before);
-      if (mode === "cancel") {
+      if (mode === "cancel" || mode === "cancel-stream") {
         assert.equal(state.status, "cancelled");
-        assert.equal(answers.length, 0);
+        if (mode === "cancel") assert.equal(answers.length, 0);
+        if (mode === "cancel-stream") assert.ok(text.length > 0);
         assert.ok(log.some(e => e.type === "turn.done" && e.state.status === "cancelled"));
         assert.equal(late, 0);
       } else {

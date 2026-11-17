@@ -4,7 +4,7 @@ Person 1's contribution to ForgeLens is a desktop VS Code extension, a TrueForge
 
 ## Run the proof
 
-Use Node 22.14 or later, desktop VS Code and Ollama. Run the following from this repository in a macOS or Linux shell. The proof uses ports 8790 (TrueForge), 8792 (editor MCP) and 11436 (Ollama). The runtime and SDK versions used here are 0.185.1 and 0.185.0 respectively. The TypeScript compiler, MCP SDK and other package versions are pinned in the lockfile.
+Use Node 22.14 or later, desktop VS Code and Ollama. Run the following from this repository in a macOS or Linux shell. The proof uses ports 8790 (TrueForge), 8792 (editor MCP) and 11436 (Ollama). The runtime and SDK versions used here are 0.185.1 and 0.185.0 respectively. The live machine used Node 24.19.0, VS Code 1.146.0 and Ollama 0.34.0. The lockfile pins TypeScript 5.9.3 and MCP SDK 1.32.2.
 
 1. Install, compile, and prepare a disposable workspace.
 
@@ -43,7 +43,7 @@ Use Node 22.14 or later, desktop VS Code and Ollama. Run the following from this
 
 6. Open **Sessions** in local TrueForge. In each session, inspect the read result, proposal, approval request and recorded user decision. Try a third proof, click **Cancel run** while the approval is pending, and verify the file and buffer stay unchanged. Click **ForgeLens: Cancel Run** in the command palette to cancel from outside the panel.
 
-   The same exercises can run inside an isolated VS Code test host. With both servers running, use the absolute path to your VS Code executable if `code` is unavailable. This harness drives the extension commands, waits a real five minutes before allowing the hunk, and inspects the persisted TrueForge events.
+   The same exercises and a cancellation on the first visible model delta can run inside an isolated VS Code test host. With both servers running, use the absolute path to your VS Code executable if `code` is unavailable. This harness drives the extension commands, waits a real five minutes before allowing the hunk, and inspects the persisted TrueForge events.
 
    ```sh
    code --wait --user-data-dir="$PWD/.local/test-profile" --extensions-dir="$PWD/.local/test-extensions" --disable-extensions --disable-workspace-trust --extensionDevelopmentPath="$PWD" --extensionTestsPath="$PWD/integration/live-proof.cjs" "$PWD/.local/proof-workspace"
@@ -71,6 +71,8 @@ The activated extension exports the API below. Modules inside this extension can
 | Editor | Call `startRun(modelName, instruction, {path, startLine, endLine, documentVersion, text?})`. Observe `onApproval({runId, hunkId, toolCallId})` to enable per-hunk controls. Call `approve(hunkId)` or `reject(hunkId, reason)`. A true return means the decision was queued. Mark the review decision only on `onDecision({runId, hunkId, allowed})`. Invalidate all review controls on `onInvalidate(runId)`. Native diff, Apply and undo belong to the editor module. |
 | Retrieval and tools | Bind each tool invocation to its originating run on the server. After staging a hunk, call `registerProposed(runId, hunkId)` before returning it to the model. A false return means that run cannot accept the proposal. Stop local tools and child checks on invalidation. |
 | Models and resilience | `startRun` resolves with terminal run state. `onRunFailed` emits run ID, model, message and kind (`auth`, `network`, `server`, `cancelled` or `tool`). Retain the original input, skip fallback on Cancel and apply the team's side-effect policy before replay. The proof model is independent of the competition model choice. |
+
+The persisted rejection example in `examples/approval-trace.json` shows the actual hunk ID, original tool-call arguments, source event reference and matching user decision from the local proof.
 
 A paused turn releases its stream. The harness keeps the decision state in memory, opens a new subscription at the cursor, sends queued approval answers in one request, and consumes the resumed events. After transport loss, it recovers the existing turn and merges message fragments. The same event ID can carry multiple distinct text deltas. All SDK requests use a 600-second timeout. A completed run with missing approval requests gets one follow-up turn listing just those IDs.
 

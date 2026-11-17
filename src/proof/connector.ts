@@ -49,14 +49,16 @@ export class ProofFixture {
 }
 
 export function proofSpec(agent: TrueForgeApi.AgentSpec): TrueForgeApi.AgentSpec {
-  return { ...agent, config: { ...agent.config, iterationLimit: 12 },
+  return { ...agent, model: { ...agent.model, params: { ...agent.model.params, temperature: 0, parallelToolCalls: false } },
+    instructions: agent.instructions + " In this connector proof, send exactly one tool call per assistant message. Stop and wait for its result. Never predict snapshotId or hunkId. If a tool reports an invalid ID, recover using the last successful tool response. A human denial of a real hunk is final.",
+    config: { ...agent.config, iterationLimit: 12 },
     mcpServers: [{ name: "forgelens-proof", preload: true, enableTools: ["read_range", "propose_edit", "approve_hunk"], requireApprovalForTools: ["approve_hunk"] }] };
 }
 
 export function proofInstruction(fixture: ProofFixture) {
-  return 'Read line 2 of "' + fixture.path + '" using read_range with startLine 2 and endLine 2. ' +
-    'Use propose_edit with the returned snapshotId and newText "The copper owl counted eight bells.". ' +
-    'Call approve_hunk with the exact returned hunk ID. After the decision, quote the original line and stop.';
+  return 'First call only read_range on "' + fixture.path + '" with startLine 2 and endLine 2. Wait for the tool response. ' +
+    'Then call only propose_edit with the exact snapshotId from that response and newText "The copper owl counted eight bells.". ' +
+    'Wait for propose_edit to return hunkIds. Then call only approve_hunk with its first exact hunk ID. After the decision, quote the original line and stop.';
 }
 
 export async function listenProof(port: number, current: () => ProofFixture | undefined) {

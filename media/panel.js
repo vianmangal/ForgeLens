@@ -26,7 +26,7 @@ function updateCards(rows) {
       }
       const feedback = document.createElement("p");
       card.append(feedback);
-      for (const allow of [true, false]) {
+      for (const allow of (row.detail ? [true, false] : [])) {
         const button = document.createElement("button");
         button.textContent = allow ? "Accept" : "Reject";
         button.onclick = () => vscode.postMessage({ type: "decision", runId, hunkId: row.hunkId, allow });
@@ -35,13 +35,14 @@ function updateCards(rows) {
       cards.set(row.hunkId, card);
       el("approvals").append(card);
     }
-    card.querySelector("p").textContent = { pending: "Awaiting your decision", sending: "Sending decision…",
+    card.querySelector("p").textContent = { pending: row.detail ? "Awaiting your decision" : "Review this hunk in the editor.", sending: "Sending decision…",
       accepted: "Accepted", rejected: "Rejected" }[row.status];
     card.querySelectorAll("button").forEach(button => { button.disabled = row.status !== "pending"; });
   }
 }
 window.addEventListener("message", ({ data }) => {
   if (data.type === "delta" && data.runId === runId) {
+    el("reply-section").hidden = false;
     el("reply").append(document.createTextNode(data.text));
   }
   if (data.type !== "view") return;
@@ -54,6 +55,7 @@ window.addEventListener("message", ({ data }) => {
     cancelled: "Cancelled", failed: "Failed", applied: "Applied", fell_back: "Using backup" };
   el("status").textContent = status ? labels[status] + " · " + data.state.model : "";
   el("error").textContent = data.error;
+  el("reply-section").hidden = !data.text;
   el("reply").textContent = data.text;
   updateCards(data.rows);
 });

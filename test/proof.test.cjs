@@ -30,6 +30,7 @@ test("the proof connector has its own approval policy without replacing the team
   const agent = require("../agent/forgelens.agent.json");
   const proof = proofSpec(agent);
   assert.equal(agent.mcpServers[0].name, "forgelens");
+  assert.equal(proof.model.params.parallelToolCalls, false);
   assert.equal(proof.mcpServers[0].name, "forgelens-proof");
   assert.deepEqual(proof.mcpServers[0].requireApprovalForTools, ["approve_hunk"]);
   assert.ok(!agent.mcpServers[0].preloadTools.includes("run_check"));
