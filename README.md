@@ -76,6 +76,10 @@ The persisted rejection example in `examples/approval-trace.json` shows the actu
 
 A paused turn releases its stream. The harness keeps the decision state in memory, opens a new subscription at the cursor, sends queued approval answers in one request, and consumes the resumed events. After transport loss, it recovers the existing turn and merges message fragments. The same event ID can carry multiple distinct text deltas. All SDK requests use a 600-second timeout. A completed run with missing approval requests gets one follow-up turn listing just those IDs.
 
+## Editor and review
+
+Inline edit (`Ctrl+Alt+E`), the native diff, per-change Accept/Reject, atomic Apply, undo and conflict detection live in `src/review/`. See [docs/editor-review.md](docs/editor-review.md) for the user flow, the tool integration for `propose_edit`, and the checks.
+
 ## What this checkout verifies
 
 `npm test` covers streaming, event correlation, bounded follow-up, interrupted and replayed streams, cancellation, failure classification and the fixture. The live host exercises the installed extension, TrueForge and Ollama. Workspace search, the full review store, budget accounting, fallback policy and the three competition demonstrations depend on the other team contributions.
