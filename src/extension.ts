@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { readFile } from "node:fs/promises";
 import type { TrueForgeApi } from "@truefoundry/trueforge-sdk" with { "resolution-mode": "import" };
 import { Harness, type Failure, type Selection } from "./trueforge/harness";
+import { Fallback } from "./trueforge/fallback";
 import { type RunState } from "./shared/types";
 import { listenProof, ProofFixture, proofInstruction, proofSpec } from "./proof/connector";
 import { AgentPanel } from "./ui/panel";
@@ -51,7 +52,16 @@ export async function activate(context: vscode.ExtensionContext) {
     const port = config().get<number>("trueforgePort", 8790);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid local TrueForge port.");
     const client = new TrueForge({ baseUrl: "http://127.0.0.1:" + port, timeoutInSeconds: 600, maxRetries: 0 });
-    const harness = new Harness(client.sessions, proof ? proofSpec(agent) : agent, {
+    const fallback = new Fallback({
+      backupModel: () => config().get<string>("backupModel", ""),
+      notice(message) {
+        if (active !== harness) return;
+        output.appendLine("\n" + message);
+        panel.problem(message);
+      },
+      problem(message) { if (active === harness) panel.problem(message); }
+    });
+    const harness = new Harness(client.sessions, proof ? proofSpec(agent) : agent, fallback.guard({
       onState(state) {
         if (active !== harness) return;
         if (state.runId !== shownRun) { shownRun = state.runId; output.appendLine("\nRun " + state.runId + " · " + state.model); }
@@ -71,23 +81,23 @@ export async function activate(context: vscode.ExtensionContext) {
         if (active !== harness) return;
         panel.invalidate(); invalidations.fire(runId);
       }
-    }, proof ? "forgelens-proof" : "forgelens");
+    }), proof ? "forgelens-proof" : "forgelens");
     harness.onRunFailed(failure => {
       if (active !== harness) return;
       output.appendLine("\n" + failure.kind + " · " + failure.message);
-      if (failure.kind !== "cancelled") panel.problem(failure.message);
       failures.fire(failure);
     });
+    fallback.attach(harness);
     active = harness;
-    return harness;
+    return { harness, fallback };
   };
   start = (name, instruction, selection) => {
     if (!name.trim() || !instruction.trim()) throw new Error("Provide a model and an instruction.");
     ensureIdle();
     fixture = undefined;
-    const harness = makeHarness(false);
+    const { fallback } = makeHarness(false);
     panel.open();
-    return harness.startRun(name, instruction, selection);
+    return fallback.start(name, instruction, selection);
   };
   panel = new AgentPanel(context.extensionUri, { run: instruction => startRun(model(), instruction), cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id) });
@@ -111,7 +121,7 @@ export async function activate(context: vscode.ExtensionContext) {
       return [document.lineAt(0).text, document.lineAt(1).text, ""].join("\n");
     };
     await readProof();
-    const harness = makeHarness(true);
+    const { harness } = makeHarness(true);
     const ownedRun = () => harness.state?.runId;
     fixture = new ProofFixture(readProof,
       () => active === harness && harness.isActive(ownedRun() ?? ""),
