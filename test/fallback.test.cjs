@@ -160,3 +160,110 @@ test("late events from the primary after the switch are ignored", async () => {
   assert.deepEqual(observed.invalidate, [primaryId]);
   assert.equal(observed.states.at(-1).runId, state.runId);
 });
+
+test("the backup resolves the edit while primary cleanup is still pending", async () => {
+  const cleanup = deferred();
+  const backupDone = deferred();
+  const { fallback, observed } = fixture({
+    "primary/model": async () => { throw new Error("fetch failed"); },
+    "backup/model": async function* () {
+      try { yield* backupWorks(); } finally { backupDone.resolve(); }
+    },
+    overrides: { cancel: () => cleanup.promise }
+  });
+  try {
+    const finish = fallback.start("primary/model", "Edit");
+    await backupDone.promise;
+    // Let the terminal state propagate while cleanup remains blocked.
+    const result = await Promise.race([finish, new Promise(resolve => setImmediate(resolve))]);
+    assert.equal(result?.status, "ready_to_apply");
+    assert.equal(result?.runId, observed.states.at(-1).runId);
+  } finally {
+    cleanup.resolve();
+  }
+});
+
+const checkCall = {
+  id: "check", type: "function", function: { name: "run_check", arguments: "{}" },
+  toolInfo: { type: "mcp", name: "run_check", serverId: "local", serverName: "forgelens" }
+};
+
+const deferredCheck = {
+  ...checkCall,
+  function: { name: "call_tool", arguments: JSON.stringify({ mcp_server: "forgelens", tool_name: "run_check", input: {} }) },
+  toolInfo: { type: "truefoundry-system", name: "call_tool" }
+};
+
+for (const lostResponse of [false, true]) {
+  test("a dispatched check prevents replay " + (lostResponse ? "when its approval response is lost" : "after it finishes"), async () => {
+    const agent = require("../agent/forgelens.agent.json");
+    assert.ok(agent.mcpServers[0].requireApprovalForTools.includes("run_check"));
+    const sent = [];
+    const { fallback, observed } = fixture({
+      "primary/model": () => events(created(), { ...base, toolCalls: [lostResponse ? checkCall : deferredCheck] },
+        { type: "tool.approval_required", id: "gate", threadId: "main", toolCalls: [{ id: "check", sourceEventId: "msg" }] },
+        { type: "turn.update", id: "pause", state: { status: "paused" } }),
+      "backup/model": backupWorks,
+      overrides: {
+        subscribeToTurn: async () => events({ type: "tool.response", id: "result", toolCallId: "check", threadId: "main", content: "ok" },
+          done("error", { message: "HTTP 503" })),
+        createTurnEvents: async (_session, _turn, { events }) => {
+          sent.push(...events);
+          if (lostResponse) throw new Error("connection reset");
+        }
+      }
+    });
+    const state = await fallback.start("primary/model", "Run the check");
+    assert.deepEqual(sent.map(e => [e.toolCallId, e.approval.status]), [["check", "allow"]]);
+    assert.equal(state.status, "failed");
+    assert.deepEqual(observed.models, ["primary/model"]);
+    assert.match(observed.problems[0], /run_check/);
+  });
+}
+
+test("a completed check observed on the stream prevents replay without a local approval", async () => {
+  const { fallback, observed } = fixture({
+    "primary/model": () => events(created(), { ...base, toolCalls: [deferredCheck] },
+      { type: "tool.response", id: "result", toolCallId: deferredCheck.id, threadId: "main", content: "ok" },
+      done("error", { message: "HTTP 503" })),
+    "backup/model": backupWorks
+  });
+  const state = await fallback.start("primary/model", "Run the check");
+  assert.equal(state.status, "failed");
+  assert.deepEqual(observed.models, ["primary/model"]);
+});
+
+test("a read-only tool can finish before a recoverable model failure", async () => {
+  const read = { ...checkCall, toolInfo: { ...checkCall.toolInfo, name: "read_range" } };
+  const { fallback, observed } = fixture({
+    "primary/model": () => events(created(), { ...base, toolCalls: [read] },
+      { type: "tool.response", id: "result", toolCallId: read.id, threadId: "main", content: "line" },
+      done("error", { message: "HTTP 503" })),
+    "backup/model": backupWorks
+  });
+  const state = await fallback.start("primary/model", "Read the selection", selection);
+  const primary = observed.states[0].runId;
+  assert.equal(state.status, "ready_to_apply");
+  assert.equal(observed.states.find(s => s.runId !== primary).replacesRunId, primary);
+});
+
+test("a deferred check targeting another connector is denied and leaves fallback available", async () => {
+  const foreign = {
+    ...deferredCheck,
+    function: { name: "call_tool", arguments: JSON.stringify({ mcp_server: "other", tool_name: "run_check", input: {} }) }
+  };
+  const sent = [];
+  const { fallback } = fixture({
+    "primary/model": () => events(created(), { ...base, toolCalls: [foreign] },
+      { type: "tool.approval_required", id: "gate", threadId: "main", toolCalls: [{ id: "check", sourceEventId: "msg" }] },
+      { type: "turn.update", id: "pause", state: { status: "paused" } }),
+    "backup/model": backupWorks,
+    overrides: {
+      createTurnEvents: async (_session, _turn, { events }) => sent.push(...events),
+      subscribeToTurn: async () => events(done("error", { message: "HTTP 503" }))
+    }
+  });
+  const state = await fallback.start("primary/model", "Edit");
+  assert.deepEqual(sent.map(e => e.approval.status), ["deny"]);
+  assert.equal(state.model, "backup/model");
+});

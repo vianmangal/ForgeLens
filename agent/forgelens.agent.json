@@ -7,6 +7,6 @@
     "enableTools": ["search_text", "find_symbol", "read_range", "propose_edit", "approve_hunk", "run_check"],
     "preload": false,
     "preloadTools": ["search_text", "find_symbol", "read_range", "propose_edit", "approve_hunk"],
-    "requireApprovalForTools": ["approve_hunk"]
+    "requireApprovalForTools": ["approve_hunk", "run_check"]
   }]
 }

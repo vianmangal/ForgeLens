@@ -12,6 +12,7 @@ interface Plan {
   selection?: Selection;
   primary?: Failure;
   next?: Promise<RunState>;
+  followBackup?: (backup: Promise<RunState>) => void;
 }
 
 export class Fallback {
@@ -45,14 +46,18 @@ export class Fallback {
 
   start(model: string, instruction: string, selection?: Selection): Promise<RunState> {
     const plan: Plan = { instruction, selection };
-    return this.run(model, plan).then(state => plan.next ?? state);
+    const primary = this.run(model, plan);
+    return new Promise((resolve, reject) => {
+      plan.followBackup = resolve;
+      (plan.next ?? primary).then(resolve, reject);
+    });
   }
 
   private run(model: string, plan: Plan): Promise<RunState> {
     if (!this.harness) throw new Error("Attach a harness before starting a run.");
     this.pending = plan;
     try {
-      return this.harness.startRun(model, plan.instruction, plan.selection);
+      return this.harness.startRun(model, plan.instruction, plan.selection, plan.primary?.runId);
     } finally {
       this.pending = undefined;
     }
@@ -87,6 +92,10 @@ export class Fallback {
       this.options.problem(failure.message);
       return;
     }
+    if (failure.checkMayHaveRun) {
+      this.options.problem(failure.message + " Automatic fallback stopped because run_check may already have run. Check its result before retrying.");
+      return;
+    }
     this.retired.add(failure.runId);
     this.invalidate(failure.runId);
     try {
@@ -96,6 +105,7 @@ export class Fallback {
         " could not start: " + (error instanceof Error ? error.message : String(error)));
       return;
     }
+    plan.followBackup?.(plan.next);
     this.options.notice("Primary model failed → using backup " + backup);
   }
 }

@@ -15,6 +15,7 @@ export interface Failure {
   model: string;
   kind: "auth" | "network" | "server" | "cancelled" | "tool";
   message: string;
+  checkMayHaveRun?: boolean;
 }
 
 export interface HarnessHooks {
@@ -30,7 +31,7 @@ type Sessions = Pick<TrueForge["sessions"], "create" | "get" | "createTurnStream
   "subscribeToTurn" | "getTurn" | "listTurnEvents" | "cancel">;
 
 const request = { timeoutInSeconds: 600, maxRetries: 0 };
-type Call = { threadId: string; hunkId?: string; decision?: Api.ApprovalDecision };
+type Call = { threadId: string; hunkId?: string; check?: boolean; decision?: Api.ApprovalDecision };
 
 class Run {
   state: RunState;
@@ -44,6 +45,7 @@ class Run {
   finished?: Promise<RunState>;
   cancellation?: Promise<void>;
   drainError?: Error;
+  checkMayHaveRun = false;
   terminalTurn = false;
   openedTurn = false;
   lastMessage = new Map<string, Api.ModelMessageEvent>();
@@ -56,6 +58,19 @@ class Run {
 
   get options() {
     return { ...request, abortSignal: this.controller.signal };
+  }
+}
+
+function isRunCheck(call: Api.ToolCall, connector: string): boolean {
+  const info = call.toolInfo;
+  if (info.type === "mcp") return info.serverName === connector && info.name === "run_check";
+  if (info.name !== "call_tool") return false;
+  // Deferred calls expose the system wrapper in both live and replayed events.
+  try {
+    const target = JSON.parse(call.function.arguments);
+    return target?.mcp_server === connector && target.tool_name === "run_check";
+  } catch {
+    return false;
   }
 }
 
@@ -99,7 +114,7 @@ export class Harness {
     return true;
   }
 
-  startRun(modelName: string, instruction: string, selection?: Selection): Promise<RunState> {
+  startRun(modelName: string, instruction: string, selection?: Selection, replacesRunId?: string): Promise<RunState> {
     if (this.current?.active) throw new Error("Finish or cancel the current run first.");
     if (!modelName.trim() || !instruction.trim()) throw new Error("Provide a configured model name and an instruction.");
     if (selection && (!selection.path || !Number.isSafeInteger(selection.startLine) ||
@@ -108,6 +123,7 @@ export class Harness {
     }
     if (this.current?.state.status === "ready_to_apply") this.hooks.onInvalidate?.(this.current.state.runId);
     const run = new Run(modelName);
+    if (replacesRunId) run.state.replacesRunId = replacesRunId;
     this.current = run;
     const content = selection ? instruction + "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection) : instruction;
     run.finished = this.execute(run, content);
@@ -168,7 +184,9 @@ export class Harness {
     run.state.status = kind === "cancelled" ? "cancelled" : "failed";
     this.hooks.onInvalidate?.(run.state.runId);
     this.publish(run);
-    for (const listener of this.failures) listener({ runId: run.state.runId, model: run.state.model, kind, message });
+    const failure: Failure = { runId: run.state.runId, model: run.state.model, kind, message };
+    if (run.checkMayHaveRun) failure.checkMayHaveRun = true;
+    for (const listener of this.failures) listener(failure);
   }
 
   private async execute(run: Run, content: string): Promise<RunState> {
@@ -294,6 +312,16 @@ export class Harness {
     }
     if (run.seen.has(event.id)) return;
     run.seen.add(event.id);
+    if (event.type === "tool.response" && !run.checkMayHaveRun) {
+      // A decision can also be made in the TrueForge session UI.
+      for (const message of run.lastMessage.values()) {
+        if (message.threadId === event.threadId &&
+          message.toolCalls?.some(call => call.id === event.toolCallId && isRunCheck(call, this.connector))) {
+          run.checkMayHaveRun = true;
+          break;
+        }
+      }
+    }
     if (event.type === "tool.approval_required") {
       for (const ref of event.toolCalls) this.mapApproval(run, event.threadId, ref);
     }
@@ -320,6 +348,10 @@ export class Harness {
     const msg = run.lastMessage.get(ref.sourceEventId);
     const call = msg?.threadId === threadId && msg.toolCalls?.find(item => item.id === ref.id);
     let hunkId: unknown;
+    if (call && isRunCheck(call, this.connector)) {
+      run.pending.set(ref.id, { threadId, check: true, decision: { status: "allow" } });
+      return;
+    }
     if (call && call.toolInfo.type === "mcp" && call.toolInfo.serverName === this.connector &&
       call.toolInfo.name === "approve_hunk") {
       try { hunkId = JSON.parse(call.function.arguments)?.hunkId; } catch {}
@@ -348,6 +380,8 @@ export class Harness {
     const events: Api.TurnUserEventMessage[] = [...run.pending].map(([toolCallId, call]) => ({
       type: "user.tool_approval", threadId: call.threadId, toolCallId, approval: call.decision!
     }));
+    // TrueForge may receive an allowance even if its HTTP acknowledgement is lost.
+    if ([...run.pending.values()].some(call => call.check)) run.checkMayHaveRun = true;
     await this.sessions.createTurnEvents(sessionId, turnId!, { events }, run.options);
     if (run.active) {
       for (const call of run.pending.values()) {
