@@ -72,3 +72,7 @@ Only the TrueForge event source is a local fixture passed through `review.connec
 The first run downloads stable VS Code and requires network access. Set `VSCODE_VERSION` to select another release, or `VSCODE_EXECUTABLE_PATH` to an existing VS Code executable to run offline. Download or launch failures exit nonzero; they must not be reported as passing host tests. See the [VS Code extension testing guide](https://code.visualstudio.com/api/working-with-extensions/testing-extension).
 
 Verified on macOS with installed VS Code 1.146.0: **8 passed, 0 failed**. The unit suite passes **60 tests**. This verifies the editor client; the real Person 3 tool integration remains a separate check.
+
+## Agent-panel layout proposal
+
+The [proposal on PR #1](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977657430) keeps the native, keyboard-accessible ForgeLens Review Explorer as the grouped multi-file list. Existing panel approval rows continue to submit through `approve`/`reject` and synchronize with review via `onDecision`. Vian can optionally add an **Open review** link by adding `enableCommandUris: ["forgelens.review.focus"],` to the webview options and `<a href="command:forgelens.review.focus">Open review</a>` to its HTML. Layout agreement and the optional panel change are pending Vian; no panel or media files were changed here.
