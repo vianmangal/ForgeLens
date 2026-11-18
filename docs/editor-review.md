@@ -52,3 +52,23 @@ The extension's exported API now includes `review`.
 3. Press `Ctrl+Z`. The file is restored.
 4. Edit the file before applying. Apply refuses and keeps your edit.
 5. With three files open, run **Fake Multi-File Proposal**. All three apply in one step.
+
+## Extension-host checks
+
+Run `npm run test:host` on macOS. It builds the extension and uses `@vscode/test-electron` to launch an isolated VS Code test host with a temporary workspace, profile and extensions directory. The suite runs unattended, with no TrueForge or Ollama server and no manual clicks. Electron still requires a macOS desktop session. The runner deletes the temporary workspace and profile when the host exits; the downloaded VS Code cache stays under ignored `.local/vscode-test/`.
+
+The eight cases use the activated extension's exported `review` API, the dev proposal command, the review commands and real VS Code documents. They cover:
+
+- Two hunks in one file, accept one and reject one, then Apply and native `undo`.
+- Three files in one Apply, restored together by one native `undo`.
+- A manual edit blocking every write and naming the conflicted file.
+- Cancel Review blocking late decisions and Apply, with late events unable to recreate a cleared run, reopen a diff or restore CodeLens.
+- A version-only change after editing and native undo blocking Apply.
+- Fallback invalidating the old run while preserving the replacement run.
+- Accept All and Reject All each retaining delayed approvals only for existing hunk IDs.
+
+Only the TrueForge event source is a local fixture passed through `review.connectHarness`; VS Code's editing, diff, command and undo APIs are real. The fixture does not establish real MCP/TrueForge integration. Late state events for a known, cleared harness run are ignored.
+
+The first run downloads stable VS Code and requires network access. Set `VSCODE_VERSION` to select another release, or `VSCODE_EXECUTABLE_PATH` to an existing VS Code executable to run offline. Download or launch failures exit nonzero; they must not be reported as passing host tests. See the [VS Code extension testing guide](https://code.visualstudio.com/api/working-with-extensions/testing-extension).
+
+Verified on macOS with installed VS Code 1.146.0: **8 passed, 0 failed**. The unit suite passes **60 tests**. This verifies the editor client; the real Person 3 tool integration remains a separate check.

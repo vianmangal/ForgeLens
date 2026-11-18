@@ -329,6 +329,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     const subs = [
       l.onState((state) => {
         if (!store.getRun(state.runId)) {
+          if (harnessRuns.has(state.runId)) {
+            return;
+          }
           const meta = nextLabel ?? { kind: "agent" as const, label: `Agent task ${state.runId.slice(0, 8)}`, instruction: undefined };
           nextLabel = undefined;
           store.createRun(meta.kind, meta.label, state.runId, meta.instruction);
@@ -340,6 +343,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
         }
       }),
       l.onApproval((e) => {
+        if (store.getHunk(e.hunkId)?.runId !== e.runId) {
+          return;
+        }
         if (!store.markApprovalRequested(e.hunkId, e.toolCallId)) {
           return;
         }
@@ -348,8 +354,13 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
           submit(e.hunkId, bulk === "accepted");
         }
       }),
-      l.onDecision((e) => store.decide(e.hunkId, e.allowed ? "accepted" : "rejected")),
+      l.onDecision((e) => {
+        if (store.getHunk(e.hunkId)?.runId === e.runId) {
+          store.decide(e.hunkId, e.allowed ? "accepted" : "rejected");
+        }
+      }),
       l.onInvalidate((runId) => {
+        harnessRuns.add(runId);
         void store.invalidateRun(runId).then((outcome) => {
           if (outcome.alreadyApplied) {
             vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`);

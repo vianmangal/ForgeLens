@@ -22,7 +22,8 @@
     "compile": "tsc -p .",
     "build": "npm run compile && esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=build/extension.cjs",
     "test": "npm run compile && node --test test/*.test.cjs",
-    "vscode:prepublish": "npm run build"
+    "vscode:prepublish": "npm run build",
+    "test:host": "npm run build && node test/extension-host/run.cjs"
   },
   "contributes": {
     "commands": [
@@ -227,6 +228,7 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/vscode": "1.98.0",
+    "@vscode/test-electron": "3.1.0",
     "esbuild": "0.28.2",
     "typescript": "5.9.3"
   }
