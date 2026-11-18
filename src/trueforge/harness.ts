@@ -31,7 +31,7 @@ type Sessions = Pick<TrueForge["sessions"], "create" | "get" | "createTurnStream
   "subscribeToTurn" | "getTurn" | "listTurnEvents" | "cancel">;
 
 const request = { timeoutInSeconds: 600, maxRetries: 0 };
-type Call = { threadId: string; hunkId?: string; check?: boolean; decision?: Api.ApprovalDecision };
+type Call = { threadId: string; hunkId?: string; decision?: Api.ApprovalDecision };
 
 class Run {
   state: RunState;
@@ -349,7 +349,9 @@ export class Harness {
     const call = msg?.threadId === threadId && msg.toolCalls?.find(item => item.id === ref.id);
     let hunkId: unknown;
     if (call && isRunCheck(call, this.connector)) {
-      run.pending.set(ref.id, { threadId, check: true, decision: { status: "allow" } });
+      // The session UI can approve this check before we subscribe to its result.
+      run.checkMayHaveRun = true;
+      run.pending.set(ref.id, { threadId, decision: { status: "allow" } });
       return;
     }
     if (call && call.toolInfo.type === "mcp" && call.toolInfo.serverName === this.connector &&
@@ -380,8 +382,6 @@ export class Harness {
     const events: Api.TurnUserEventMessage[] = [...run.pending].map(([toolCallId, call]) => ({
       type: "user.tool_approval", threadId: call.threadId, toolCallId, approval: call.decision!
     }));
-    // TrueForge may receive an allowance even if its HTTP acknowledgement is lost.
-    if ([...run.pending.values()].some(call => call.check)) run.checkMayHaveRun = true;
     await this.sessions.createTurnEvents(sessionId, turnId!, { events }, run.options);
     if (run.active) {
       for (const call of run.pending.values()) {

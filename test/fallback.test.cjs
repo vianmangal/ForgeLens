@@ -267,3 +267,26 @@ test("a deferred check targeting another connector is denied and leaves fallback
   assert.deepEqual(sent.map(e => e.approval.status), ["deny"]);
   assert.equal(state.model, "backup/model");
 });
+
+for (const serverName of ["forgelens", "other"]) {
+  test("subscription loss with a pending check on " + serverName, async () => {
+    const call = { ...checkCall, toolInfo: { ...checkCall.toolInfo, serverName } };
+    const { fallback, observed } = fixture({
+      "primary/model": () => events(created(), { ...base, toolCalls: [call] },
+        { type: "tool.approval_required", id: "gate", threadId: "main", toolCalls: [{ id: call.id, sourceEventId: "msg" }] },
+        { type: "turn.update", id: "pause", state: { status: "paused" } }),
+      "backup/model": backupWorks,
+      overrides: { subscribeToTurn: async () => { throw new Error("connection reset"); } }
+    });
+    const state = await fallback.start("primary/model", "Run the check");
+    assert.equal(observed.failures[0].kind, "network");
+    if (serverName === "forgelens") {
+      assert.deepEqual(observed.models, ["primary/model"]);
+      assert.equal(state.status, "failed");
+      assert.match(observed.problems[0], /run_check/);
+    } else {
+      assert.equal(state.model, "backup/model");
+      assert.equal(state.status, "ready_to_apply");
+    }
+  });
+}
