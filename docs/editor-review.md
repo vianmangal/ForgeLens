@@ -76,3 +76,11 @@ Verified on macOS with installed VS Code 1.146.0: **8 passed, 0 failed**. The un
 ## Agent-panel layout proposal
 
 The [proposal on PR #1](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977657430) keeps the native, keyboard-accessible ForgeLens Review Explorer as the grouped multi-file list. Existing panel approval rows continue to submit through `approve`/`reject` and synchronize with review via `onDecision`. Vian can optionally add an **Open review** link by adding `enableCommandUris: ["forgelens.review.focus"],` to the webview options and `<a href="command:forgelens.review.focus">Open review</a>` to its HTML. Layout agreement and the optional panel change are pending Vian; no panel or media files were changed here.
+
+## Person 3 integration audit, 18 November 2026
+
+After `git fetch --all`, the remote branches were `main`, `feat/editor-review`, `feat/models-resilience`, `feat/retrieval-mcp`, and `feat/verification-submission`. `origin/HEAD` points to `origin/main`.
+
+`origin/feat/retrieval-mcp` still points to `20e3199f57a2dc643abfe73afef9421734ba06b8`. Its only `read_range` and `propose_edit` implementations are the isolated proof fixture. They return snapshot/hunk IDs and register the fixture hunk against the owning harness run before returning it, rejecting inactive owners. They do not call `review.store.captureSnapshot(document)` or `review.store.propose(runId, snapshotId, request)`, register the review store's returned hunk IDs, or propagate its errors. That branch does not yet export `review`.
+
+The [PR audit comment](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977666371) links the exact registration and tool code. The real workspace tool → review → TrueForge approval integration remains pending Person 3's implementation and a joint live check. The remote branch was inspected without checkout or modification.
