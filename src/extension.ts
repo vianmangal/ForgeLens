@@ -6,8 +6,11 @@ import { Fallback } from "./trueforge/fallback";
 import { type RunState } from "./shared/types";
 import { listenProof, ProofFixture, proofInstruction, proofSpec } from "./proof/connector";
 import { AgentPanel } from "./ui/panel";
+import { activateReview, type ReviewApi } from "./review";
+import { instructionLabel } from "./review/store";
 
 let active: Harness | undefined;
+let review: ReviewApi | undefined;
 let listener: ReturnType<typeof listenProof> | undefined;
 let fixture: ProofFixture | undefined;
 let panel: AgentPanel;
@@ -19,7 +22,10 @@ export function startRun(modelName: string, instruction: string, selection?: Sel
 
 export function approve(hunkId: string) { return active?.approve(hunkId) ?? false; }
 export function reject(hunkId: string, reason?: string) { return active?.reject(hunkId, reason) ?? false; }
-export function cancel() { return active?.cancel() ?? Promise.resolve(); }
+export async function cancel() {
+  await active?.cancel();
+  await review?.store.serialize(async () => {});
+}
 export function registerProposed(runId: string, hunkId: string) { return active?.registerProposed(runId, hunkId) ?? false; }
 const failures = new vscode.EventEmitter<Failure>();
 export const onRunFailed = failures.event;
@@ -99,8 +105,21 @@ export async function activate(context: vscode.ExtensionContext) {
     panel.open();
     return fallback.start(name, instruction, selection);
   };
-  panel = new AgentPanel(context.extensionUri, { run: instruction => startRun(model(), instruction), cancel,
+  review = activateReview(context);
+  const editorReview = review;
+  panel = new AgentPanel(context.extensionUri, {
+    run: instruction => {
+      const name = model();
+      editorReview.expectRun({ kind: "agent", label: instructionLabel(instruction), instruction });
+      try { return startRun(name, instruction); } finally { editorReview.expectRun(undefined); }
+    },
+    cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id) });
+  context.subscriptions.push(editorReview.connectHarness({
+    startRun: (instruction, selection) => startRun(model(), instruction, selection),
+    approve, reject, cancel, onState: changes.event, onDelta: deltas.event, onApproval: approvals.event,
+    onDecision: decisions.event, onInvalidate: invalidations.event, onRunFailed
+  }));
   const startConnector = async () => {
     const port = config().get<number>("proofPort", 8792);
     if (!listener) listener = listenProof(port, () => fixture);
@@ -150,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(panel);
   return { startRun, approve, reject, registerProposed, cancel, onRunFailed, onState: changes.event,
     onDelta: deltas.event, onApproval: approvals.event, onDecision: decisions.event, onInvalidate: invalidations.event,
-    isActive: (runId: string) => active?.isActive(runId) ?? false, getState: () => active?.state };
+    isActive: (runId: string) => active?.isActive(runId) ?? false, getState: () => active?.state, review };
 }
 
 export async function deactivate() {
