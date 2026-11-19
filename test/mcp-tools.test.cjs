@@ -221,3 +221,16 @@ test("an invalid configured context budget falls back to the default instead of 
   assert.equal(tools.getBudgetForRun("budget-valid").limitTokens, 250);
   tools.clearBudgetForRun("budget-valid");
 });
+
+test("cancelling the run stops a running check promptly and reports it as cancelled", async t => {
+  const { call, state } = await setup(t);
+  settings.set("pythonPath", process.execPath);
+  settings.set("checkProfiles", [{ id: "slow", args: ["-e", "process.stdout.write('started'); setTimeout(() => process.stdout.write('finished'), 20000)"] }]);
+  const started = Date.now();
+  const running = call("run_check", { checkId: "slow" });
+  setTimeout(() => { state.active = false; }, 200);
+  const outcome = await running;
+  assert.equal(outcome.status, "cancelled");
+  assert.doesNotMatch(outcome.stdout, /finished/);
+  assert.ok(Date.now() - started < 5000);
+});
