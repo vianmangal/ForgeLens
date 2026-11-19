@@ -93,7 +93,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
   let lastHarnessRun: RunId | undefined;
   let link: HarnessLink | undefined;
   let nextLabel: ExpectedRun | undefined;
-  const REJECT_REASON = "Rejected by the developer in ForgeLens review.";
+  const REJECT_REASON = "Rejected by the developer in ForgeLens review. This decision is final; do not propose the same change again.";
 
   const treeView = vscode.window.createTreeView("forgelens.review", { treeDataProvider: tree, showCollapseAll: true });
 

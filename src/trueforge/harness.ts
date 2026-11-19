@@ -82,6 +82,20 @@ function isRunCheck(call: Api.ToolCall, connector: string): boolean {
   }
 }
 
+function approvedHunkId(call: Api.ToolCall, connector: string): unknown {
+  try {
+    const args = JSON.parse(call.function.arguments);
+    if (call.toolInfo.type === "mcp") {
+      return call.toolInfo.serverName === connector && call.toolInfo.name === "approve_hunk" ? args?.hunkId : undefined;
+    }
+    if (call.toolInfo.name !== "call_tool" || args?.mcp_server !== connector || args.tool_name !== "approve_hunk") return undefined;
+    const input = typeof args.input === "string" ? JSON.parse(args.input) : args.input;
+    return input?.hunkId;
+  } catch {
+    return undefined;
+  }
+}
+
 function failureKind(error: unknown, message: string): Failure["kind"] {
   const status = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
   const description = String(status ?? "") + " " + message;
@@ -167,7 +181,7 @@ export class Harness {
     return this.decide(hunkId, { status: "allow" });
   }
 
-  reject(hunkId: string, reason = "Rejected by the developer."): boolean {
+  reject(hunkId: string, reason = "Rejected by the developer. This decision is final; do not propose the same change again."): boolean {
     return this.decide(hunkId, { status: "deny", reason });
   }
 
@@ -396,10 +410,7 @@ export class Harness {
       run.pending.set(ref.id, { threadId, decision: { status: "allow" } });
       return;
     }
-    if (call && call.toolInfo.type === "mcp" && call.toolInfo.serverName === this.connector &&
-      call.toolInfo.name === "approve_hunk") {
-      try { hunkId = JSON.parse(call.function.arguments)?.hunkId; } catch {}
-    }
+    if (call) hunkId = approvedHunkId(call, this.connector);
     if (typeof hunkId !== "string" || !run.proposed.has(hunkId) || run.requested.has(hunkId)) {
       run.pending.set(ref.id, { threadId, decision: { status: "deny", reason: "No matching pending ForgeLens hunk in this run." } });
       return;
