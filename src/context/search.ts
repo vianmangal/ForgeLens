@@ -59,6 +59,11 @@ const EXCLUDED_DIRECTORIES = new Set([
   "build"
 ]);
 
+export function isInExcludedDirectory(relativePath: string): boolean {
+  const segments = relativePath.replace(/\\/g, "/").split("/");
+  return segments.slice(0, -1).some(segment => EXCLUDED_DIRECTORIES.has(segment.toLowerCase()));
+}
+
 const decoder = new TextDecoder("utf-8");
 const SIGNAL_RANK: Record<SearchResult["signal"], number> = { symbol_definition: 0, identifier_match: 1, text_match: 2 };
 const DEFINITION_KEYWORDS = "(?:def|class|function\\*?|func|fn|interface|type|struct|enum|trait|module|const|let|var)";

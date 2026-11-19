@@ -123,3 +123,30 @@ test("an inline selection is charged to the run budget and shortened by whole li
   assert.deepEqual([none.selection.text, none.selection.truncated, none.row.exclusion, none.row.costTokens], ["", true, "over_budget", 0]);
   assert.deepEqual(budgetSelection({ path: "a.py", startLine: 1, endLine: 1 }, roomy), { selection: { path: "a.py", startLine: 1, endLine: 1 } });
 });
+
+test("symbol provider results inside dependency or generated folders are dropped", async t => {
+  const root = await workspace(t);
+  const at = relative => ({ uri: uri(path.join(root, relative)), range: { start: { line: 4 }, end: { line: 9 } } });
+  vscode.SymbolKind = { 11: "Function" };
+  vscode.commands = { executeCommand: async () => [
+    { name: "run_command", kind: 11, location: at(".venv/lib/python3.12/site-packages/pkg/cli.py") },
+    { name: "run_command", kind: 11, location: at("node_modules/pkg/index.js") },
+    { name: "run_command", kind: 11, location: at("build/lib/cli.py") },
+    { name: "run_command", kind: 11, location: at("src/cli.py") }
+  ] };
+  const saved = vscode.workspace.asRelativePath;
+  vscode.workspace.asRelativePath = target => path.relative(root, target.path);
+  t.after(() => { vscode.workspace.asRelativePath = saved; });
+  const { findSymbol } = (() => {
+    const load = Module._load;
+    try {
+      Module._load = function(name, ...args) { return name === "vscode" ? vscode : load.call(this, name, ...args); };
+      return require("../dist/context/symbols.js");
+    } finally {
+      Module._load = load;
+    }
+  })();
+  const response = await findSymbol("run_command", new RunContextBudget("symbols", 1000));
+  assert.equal(response.source, "workspace_provider");
+  assert.deepEqual(response.results.map(result => [result.path, result.startLine, result.endLine]), [["src/cli.py", 5, 10]]);
+});

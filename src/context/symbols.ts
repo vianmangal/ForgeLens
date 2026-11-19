@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { ContextRow } from "../shared/types";
 import { RunContextBudget } from "./budget";
-import { searchText } from "./search";
+import { isInExcludedDirectory, searchText } from "./search";
 
 export interface SymbolResult {
   name: string;
@@ -159,7 +159,7 @@ export async function findSymbol(
     if (!range || !uri || !Number.isInteger(range.start?.line) || !Number.isInteger(range.end?.line)) continue;
     const filePath = workspacePath(uri);
 
-    if (!filePath) {
+    if (!filePath || isInExcludedDirectory(filePath)) {
       continue;
     }
 
