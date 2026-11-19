@@ -14,6 +14,17 @@ interface MentionSource {
 interface PreparedMentionInput {
   instruction: string;
   contextRows: ContextRow[];
+  state: MentionPreparationState;
+}
+
+interface MentionEntry {
+  kind: "file" | "symbol";
+  query: string;
+  source: MentionSource;
+}
+
+export interface MentionPreparationState {
+  entries: MentionEntry[];
 }
 
 const MAX_MENTION_FILE_BYTES = 200_000;
@@ -27,7 +38,7 @@ async function openMentionDocument(path: string): Promise<vscode.TextDocument> {
     throw new Error("Open one trusted workspace folder before using file mentions.");
   }
 
-  const normalized = path.trim().replace(/\\/g, "/");
+  const normalized = path.replace(/\\/g, "/");
   const segments = normalized.split("/").filter(segment => segment && segment !== ".");
   if (!normalized || !segments.length || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized) || segments.includes("..")) {
     throw new Error("Use a workspace-relative @file(path) mention without '..'.");
@@ -42,7 +53,7 @@ async function openMentionDocument(path: string): Promise<vscode.TextDocument> {
       (isLastSegment ? (stat.type & vscode.FileType.File) === 0 : (stat.type & vscode.FileType.Directory) === 0)) {
       throw new Error("@file mentions must point to a regular file without symbolic links.");
     }
-    if (stat.size > MAX_MENTION_FILE_BYTES) {
+    if (isLastSegment && stat.size > MAX_MENTION_FILE_BYTES) {
       throw new Error(`@file mentions are limited to ${MAX_MENTION_FILE_BYTES} bytes per file.`);
     }
   }
@@ -64,23 +75,50 @@ async function resolveSymbolMention(name: string, runId: string, signal: AbortSi
     throw new Error(`Could not find symbol "${name}". Check its spelling or use @file(path).`);
   }
 
-  const selected = candidates.length === 1
+  const selected = candidates.length === 1 && exact.length === 1
     ? candidates[0]
     : await chooseSymbol(candidates, name, signal);
   if (!selected) throw new Error(`No symbol was selected for @symbol(${name}).`);
 
-  const document = await openMentionDocument(selected.path);
+  let current = selected;
+  let document = await openMentionDocument(current.path);
   if (signal.aborted) throw new Error("Mention loading was cancelled.");
-  const startLine = Math.min(selected.startLine, document.lineCount);
-  const endLine = Math.min(selected.endLine, document.lineCount);
+  if (!symbolExistsInRange(document, current, name)) {
+    const refreshed = await findSymbol(name, new RunContextBudget(`${runId}:mention-refresh`, 1_000_000), current.path);
+    const refreshedExact = refreshed.results.filter(result => result.name.toLowerCase() === name.toLowerCase());
+    if (!refreshedExact.length) {
+      throw new Error(`The location for "${name}" changed. Search for it again and choose its current location.`);
+    }
+    const confirmed = await chooseSymbol(refreshedExact, name, signal);
+    if (!confirmed) throw new Error(`Choose the current location for @symbol(${name}) to continue.`);
+    current = confirmed;
+    document = await openMentionDocument(current.path);
+    if (signal.aborted) throw new Error("Mention loading was cancelled.");
+    if (!symbolExistsInRange(document, current, name)) {
+      throw new Error(`The location for "${name}" changed again. Search for it again and choose its current location.`);
+    }
+  }
+  const startLine = current.startLine;
+  const endLine = current.endLine;
   const end = Math.min(endLine, startLine + MAX_MENTION_LINES - 1);
   return {
     path: vscode.workspace.asRelativePath(document.uri, false).replace(/\\/g, "/"),
     startLine,
     endLine: end,
     lines: document.getText().split(/\r?\n/).slice(startLine - 1, end),
-    truncated: selected.endLine > end
+    truncated: current.endLine > end
   };
+}
+
+// Verifies a provider's line range still contains the chosen identifier in the current buffer.
+function symbolExistsInRange(document: vscode.TextDocument, symbol: { startLine: number; endLine: number }, name: string): boolean {
+  if (symbol.startLine < 1 || symbol.endLine < symbol.startLine || symbol.endLine > document.lineCount) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escaped}(?=$|[^A-Za-z0-9_$])`, "i");
+  for (let line = symbol.startLine; line <= symbol.endLine; line += 1) {
+    if (pattern.test(document.lineAt(line - 1).text)) return true;
+  }
+  return false;
 }
 
 // Keeps the symbol picker dismissible when the developer cancels the run.
@@ -121,12 +159,15 @@ function chooseSymbol(
 export async function prepareMentionInput(
   instruction: string,
   budget: RunContextBudget,
-  signal: AbortSignal
+  signal: AbortSignal,
+  previousState?: unknown
 ): Promise<PreparedMentionInput> {
   const pattern = /@(file|symbol)\(([^)]+)\)/g;
   const matches = [...instruction.matchAll(pattern)];
-  if (!matches.length) return { instruction, contextRows: [] };
+  if (!matches.length) return { instruction, contextRows: [], state: { entries: [] } };
 
+  const previousEntries = isMentionPreparationState(previousState) ? previousState.entries : [];
+  const entries: MentionEntry[] = [];
   const contextRows: ContextRow[] = [];
   const output: string[] = [];
   let cursor = 0;
@@ -134,12 +175,16 @@ export async function prepareMentionInput(
   for (const match of matches) {
     if (signal.aborted) throw new Error("Mention loading was cancelled.");
     const kind = match[1] as "file" | "symbol";
-    const query = match[2].trim();
+    const query = kind === "file" ? match[2] : match[2].trim();
     if (!query) throw new Error(`Add a path or name inside @${kind}(...).`);
 
     output.push(instruction.slice(cursor, match.index));
-    const document = kind === "file" ? await openMentionDocument(query) : undefined;
-    const source = document
+    const previousEntry = previousEntries[entries.length];
+    const carriedSource = previousEntry?.kind === kind && previousEntry.query === query
+      ? previousEntry.source
+      : undefined;
+    const document = kind === "file" && !carriedSource ? await openMentionDocument(query) : undefined;
+    const source = carriedSource ?? (document
       ? {
           path: vscode.workspace.asRelativePath(document.uri, false).replace(/\\/g, "/"),
           startLine: 1,
@@ -147,9 +192,11 @@ export async function prepareMentionInput(
           lines: document.getText().split(/\r?\n/).slice(0, MAX_MENTION_LINES),
           truncated: document.lineCount > MAX_MENTION_LINES
         }
-      : await resolveSymbolMention(query, budget.runId, signal);
+      : await resolveSymbolMention(query, budget.runId, signal));
     if (signal.aborted) throw new Error("Mention loading was cancelled.");
-    const row = reserveMention(kind, query, source, budget);
+    entries.push({ kind, query, source });
+    const reservation = reserveMention(kind, query, source, budget);
+    const { row } = reservation;
     contextRows.push(row);
 
     if (row.exclusion === "duplicate") {
@@ -157,21 +204,22 @@ export async function prepareMentionInput(
     } else if (!row.sentToModel) {
       output.push(`[${match[0]} was not included: ${row.exclusion ?? "budget exhausted"}.]`);
     } else {
-      const content = numberedLines(source.lines, source.startLine, row.endLine);
-      output.push(`[Explicit ${kind} context: ${source.path}:${row.startLine}-${row.endLine}]\n${content}`);
+      output.push(`[Explicit ${kind} context: ${source.path}:${row.startLine}-${row.endLine}]\n${reservation.text}`);
       if (row.exclusion === "truncated") output.push("\n[Additional lines were omitted to fit the context budget.]");
     }
     cursor = match.index + match[0].length;
   }
 
   output.push(instruction.slice(cursor));
-  return { instruction: output.join(""), contextRows };
+  return { instruction: output.join(""), contextRows, state: { entries } };
 }
 
-function numberedLines(lines: string[], startLine: number, endLine: number): string {
-  return lines.slice(0, endLine - startLine + 1)
-    .map((line, index) => `${startLine + index}: ${line}`)
-    .join("\n");
+function isMentionPreparationState(value: unknown): value is MentionPreparationState {
+  return typeof value === "object" && value !== null && "entries" in value && Array.isArray(value.entries) &&
+    value.entries.every(entry => typeof entry === "object" && entry !== null &&
+      (entry.kind === "file" || entry.kind === "symbol") && typeof entry.query === "string" &&
+      typeof entry.source === "object" && entry.source !== null && typeof entry.source.path === "string" &&
+      Array.isArray(entry.source.lines));
 }
 
 function reserveMention(
@@ -179,7 +227,7 @@ function reserveMention(
   query: string,
   source: MentionSource,
   budget: RunContextBudget
-): ContextRow {
+): { row: ContextRow; text: string } {
   const selected: string[] = [];
   let truncated = source.truncated ?? false;
 
@@ -201,7 +249,22 @@ function reserveMention(
   }
 
   const endLine = selected.length ? source.startLine + selected.length - 1 : source.startLine;
-  return budget.reserve({
+  if (!selected.length) {
+    return {
+      row: budget.recordOverBudget({
+        tool: "mention",
+        query: `@${kind}(${query})`,
+        path: source.path,
+        startLine: source.startLine,
+        endLine,
+        signal: "explicit_mention",
+        content: ""
+      }),
+      text: ""
+    };
+  }
+  const text = selected.join("\n");
+  const row = budget.reserve({
     tool: "mention",
     query: `@${kind}(${query})`,
     path: source.path,
@@ -212,8 +275,9 @@ function reserveMention(
       path: source.path,
       startLine: source.startLine,
       endLine,
-      text: selected.join("\n")
+      text
     }),
     truncated
   });
+  return { row, text };
 }

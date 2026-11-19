@@ -15,6 +15,7 @@ export type CurrentRunId = () => string | undefined;
 export interface ForgeLensToolContext {
   review: ReviewApi;
   currentRunId: CurrentRunId;
+  isRunActive: (runId: string) => boolean;
   registerProposed: (runId: string, hunkId: string) => boolean;
   onContextRows?: (runId: string, rows: ContextRow[]) => void;
 }
@@ -23,6 +24,8 @@ const budgetsByRun = new Map<string, RunContextBudget>();
 const encoder = new TextEncoder();
 const MAX_CHECK_OUTPUT_CHARS = 16_000;
 const MAX_CHECK_RUNTIME_MS = 120_000;
+const CHECK_KILL_GRACE_MS = 1_000;
+const CHECK_CLOSE_GRACE_MS = 500;
 
 // Reuses one context ledger per run so concurrent retrieval calls share its budget.
 export function getBudgetForRun(runId: string): RunContextBudget {
@@ -54,7 +57,7 @@ function result(value: unknown, isError = false) {
 
 function currentRun(context: ForgeLensToolContext): string | undefined {
   const runId = context.currentRunId();
-  return runId && context.review.store.getRun(runId)?.active ? runId : undefined;
+  return runId && context.isRunActive(runId) && context.review.store.getRun(runId)?.active ? runId : undefined;
 }
 
 // Resolves a relative file path only inside the single trusted workspace.
@@ -64,7 +67,7 @@ async function resolveWorkspaceDocument(path: string): Promise<vscode.TextDocume
     throw new Error("Open one trusted workspace folder before reading files.");
   }
 
-  const normalized = path.trim().replace(/\\/g, "/");
+  const normalized = path.replace(/\\/g, "/");
   const segments = normalized.split("/").filter(segment => segment && segment !== ".");
   if (
     !normalized ||
@@ -126,6 +129,7 @@ export function registerSearchTextTool(
 
       try {
         const response = await searchText(query, getBudgetForRun(runId), scope, limit ?? 10);
+        if (!context.isRunActive(runId)) return result({ status: "cancelled", message: "The run ended during workspace search." });
         context.onContextRows?.(runId, response.contextRows);
         return result(response);
       } catch (error) {
@@ -156,6 +160,7 @@ export function registerFindSymbolTool(
 
       try {
         const response = await findSymbol(name, getBudgetForRun(runId), pathHint);
+        if (!context.isRunActive(runId)) return result({ status: "cancelled", message: "The run ended during symbol lookup." });
         context.onContextRows?.(runId, response.contextRows);
         return result(response);
       } catch (error) {
@@ -191,6 +196,9 @@ export function registerReadRangeTool(
         }
 
         const document = await resolveWorkspaceDocument(path);
+        if (currentRun(context) !== runId) {
+          return result({ status: "cancelled", message: "The run ended while the file was opening." });
+        }
         if (endLine > document.lineCount) {
           throw new Error(`Requested lines ${startLine}-${endLine}, but the file has ${document.lineCount} lines.`);
         }
@@ -236,6 +244,26 @@ export function registerReadRangeTool(
           snapshot,
           snapshotId: snapshot.snapshotId
         });
+        if (!selected.length) {
+          const row = budget.recordOverBudget({
+            tool: "read_range",
+            query: `${snapshot.path}:${startLine}-${endLine}`,
+            path: snapshot.path,
+            startLine,
+            endLine: actualEndLine,
+            signal: "path_match",
+            content
+          });
+          context.onContextRows?.(runId, [row]);
+          return result({
+            status: "budget_exhausted",
+            message: "No complete source line fits in the remaining context budget.",
+            path: snapshot.path,
+            snapshot,
+            contextRows: [row],
+            truncated: true
+          });
+        }
         const row = budget.reserve({
           tool: "read_range",
           query: `${snapshot.path}:${startLine}-${endLine}`,
@@ -247,6 +275,17 @@ export function registerReadRangeTool(
           truncated
         });
         context.onContextRows?.(runId, [row]);
+
+        if (row.exclusion === "duplicate") {
+          return result({
+            status: "already_provided",
+            message: "This source range was already provided earlier in the run.",
+            path: snapshot.path,
+            snapshot,
+            contextRows: [row],
+            truncated: true
+          });
+        }
 
         if (!row.sentToModel) {
           return result({
@@ -271,6 +310,7 @@ export function registerReadRangeTool(
           truncated: truncated || actualEndLine < endLine
         });
       } catch (error) {
+        if (!context.isRunActive(runId)) return result({ status: "cancelled", message: "The run ended while the file was opening." });
         return result({ status: "error", message: error instanceof Error ? error.message : "Range read failed." }, true);
       }
     }
@@ -290,8 +330,8 @@ export function registerProposeEditTool(
         snapshotId: z.string().min(1).max(128),
         startLine: z.number().int().min(1).optional(),
         endLine: z.number().int().min(0).optional(),
-        oldText: z.string().min(1).max(100_000).optional(),
-        newText: z.string().max(100_000)
+        oldText: z.string().min(1).max(6_000).optional(),
+        newText: z.string().max(6_000)
       }
     },
     async ({ snapshotId, startLine, endLine, oldText, newText }) => {
@@ -364,6 +404,7 @@ export function registerRunCheckTool(
     async ({ checkId }, extra) => {
       const runId = currentRun(context);
       if (!runId) return result({ status: "no_active_run", message: "There is no active ForgeLens run." }, true);
+      if (extra.signal.aborted) return result({ status: "cancelled", message: "The run was cancelled before the check started." });
 
       const folders = vscode.workspace.workspaceFolders;
       if (!vscode.workspace.isTrusted || folders?.length !== 1) {
@@ -397,8 +438,15 @@ export function registerRunCheckTool(
       let timedOut = false;
       let cancelled = false;
       let settled = false;
+      let stopRequested = false;
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      let hardTimer: ReturnType<typeof setTimeout> | undefined;
+      let runMonitor: ReturnType<typeof setInterval> | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let resolveOutcome: ((outcome: { exitCode: number | null; processSignal: string | null; error?: string }) => void) | undefined;
 
       const capture = (target: "stdout" | "stderr", chunk: Buffer) => {
+        if (settled) return;
         const text = chunk.toString("utf8");
         const current = target === "stdout" ? stdout : stderr;
         const available = MAX_CHECK_OUTPUT_CHARS - current.length;
@@ -408,59 +456,84 @@ export function registerRunCheckTool(
         else stderr = bounded;
       };
 
-      child.stdout?.on("data", chunk => capture("stdout", Buffer.from(chunk)));
-      child.stderr?.on("data", chunk => capture("stderr", Buffer.from(chunk)));
+      const onStdout = (chunk: Buffer) => capture("stdout", Buffer.from(chunk));
+      const onStderr = (chunk: Buffer) => capture("stderr", Buffer.from(chunk));
+      child.stdout?.on("data", onStdout);
+      child.stderr?.on("data", onStderr);
 
-      const stopTree = () => {
+      const killTree = (force: boolean) => {
         if (!child.pid) return;
         if (platform === "win32") {
-          execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {
-            child.kill();
+          execFile("taskkill", ["/pid", String(child.pid), "/T", ...(force ? ["/F"] : [])], {
+            windowsHide: true,
+            timeout: CHECK_KILL_GRACE_MS
+          }, () => {
+            child.kill(force ? "SIGKILL" : "SIGTERM");
           });
         } else {
           try {
-            killProcess(-child.pid, "SIGTERM");
+            killProcess(-child.pid, force ? "SIGKILL" : "SIGTERM");
           } catch {
-            child.kill();
+            child.kill(force ? "SIGKILL" : "SIGTERM");
           }
         }
       };
 
       const signal = extra.signal;
+      const outcomePromise = new Promise<{ exitCode: number | null; processSignal: string | null; error?: string }>(resolve => {
+        resolveOutcome = resolve;
+      });
+      const finish = (outcome: { exitCode: number | null; processSignal: string | null; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        if (forceTimer) clearTimeout(forceTimer);
+        if (hardTimer) clearTimeout(hardTimer);
+        if (runMonitor) clearInterval(runMonitor);
+        if (timeout) clearTimeout(timeout);
+        signal.removeEventListener("abort", abort);
+        child.stdout?.removeListener("data", onStdout);
+        child.stderr?.removeListener("data", onStderr);
+        if (outcome.error) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }
+        resolveOutcome?.(outcome);
+      };
+      const stopTree = () => {
+        if (stopRequested || settled) return;
+        stopRequested = true;
+        killTree(false);
+        forceTimer = setTimeout(() => {
+          killTree(true);
+          hardTimer = setTimeout(() => finish({
+            exitCode: null,
+            processSignal: null,
+            error: "The child did not report closure after forced termination."
+          }), CHECK_CLOSE_GRACE_MS);
+        }, CHECK_KILL_GRACE_MS);
+      };
       const abort = () => {
         cancelled = true;
         stopTree();
       };
+      child.once("error", error => finish({ exitCode: null, processSignal: null, error: error.message }));
+      child.once("close", (exitCode, processSignal) => finish({ exitCode, processSignal }));
       if (signal.aborted) abort();
       else signal.addEventListener("abort", abort, { once: true });
 
-      const runMonitor = setInterval(() => {
-        if (currentRun(context) !== runId) abort();
+      runMonitor = setInterval(() => {
+        if (!context.isRunActive(runId)) abort();
       }, 250);
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         timedOut = true;
         abort();
       }, MAX_CHECK_RUNTIME_MS);
 
-      const outcome = await new Promise<{ exitCode: number | null; processSignal: string | null; error?: string }>(resolve => {
-        child.once("error", error => {
-          if (settled) return;
-          settled = true;
-          resolve({ exitCode: null, processSignal: null, error: error.message });
-        });
-        child.once("close", (exitCode, processSignal) => {
-          if (settled) return;
-          settled = true;
-          resolve({ exitCode, processSignal });
-        });
-      });
-
-      clearInterval(runMonitor);
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
+      const outcome = await outcomePromise;
+      if (!context.isRunActive(runId)) cancelled = true;
 
       return result({
-        status: outcome.error ? "error" : timedOut ? "timed_out" : cancelled ? "cancelled" : "completed",
+        status: timedOut ? "timed_out" : cancelled ? "cancelled" : outcome.error ? "error" : "completed",
         checkId,
         exitCode: outcome.exitCode,
         signal: outcome.processSignal,

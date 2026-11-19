@@ -73,4 +73,23 @@ export class RunContextBudget {
     this.rows.push(row);
     return row;
   }
+
+  // Records a failed reservation without spending tokens or marking content sent.
+  recordOverBudget(charge: ContextCharge): ContextRow {
+    const row: ContextRow = {
+      runId: this.runId,
+      tool: charge.tool,
+      query: charge.query,
+      path: charge.path,
+      startLine: charge.startLine,
+      endLine: charge.endLine,
+      signal: charge.signal,
+      sentToModel: false,
+      costTokens: 0,
+      cumulativeTokens: this.usedTokens,
+      exclusion: "over_budget"
+    };
+    this.rows.push(row);
+    return row;
+  }
 }

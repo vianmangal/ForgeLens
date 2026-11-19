@@ -40,6 +40,7 @@ export class AgentPanel {
       <section id="reply-section" hidden><h2>Model reply</h2><pre id="reply"></pre></section></main><script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => { this.panel = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
+      const initiatingRunId = message.runId;
       try {
         if (message.type === "ready") this.refresh();
         if (message.type === "run" && typeof message.text === "string") await this.actions.run(message.text);
@@ -60,7 +61,10 @@ export class AgentPanel {
           );
           if (row) await this.actions.openContext(row);
         }
-      } catch (error) { this.problem(String(error)); }
+      } catch (error) {
+        if (message.type === "openContext" && initiatingRunId !== this.state?.runId) return;
+        this.problem(String(error));
+      }
     });
   }
 

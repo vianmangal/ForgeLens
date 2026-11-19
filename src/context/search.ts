@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
 import ignore from "ignore";
 import type { ContextRow } from "../shared/types";
 import type { RunContextBudget } from "./budget";
@@ -23,6 +24,7 @@ export interface SearchResponse {
 interface IgnoreRule {
   directory: string;
   matcher: ReturnType<typeof ignore>;
+  ignoreCase: boolean;
 }
 
 interface SearchCandidate {
@@ -34,6 +36,7 @@ export interface SearchExecutionOptions {
   signal?: ContextRow["signal"];
   pattern?: RegExp;
   pathHint?: string;
+  filterPathHint?: boolean;
   maxTimeMs?: number;
 }
 
@@ -58,6 +61,56 @@ const EXCLUDED_DIRECTORIES = new Set([
 
 const decoder = new TextDecoder("utf-8");
 
+class SearchDeadlineError extends Error {}
+
+// Stops waiting for VS Code file-system providers when the search deadline passes.
+async function beforeDeadline<T>(operation: PromiseLike<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new SearchDeadlineError();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new SearchDeadlineError()), remaining);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// Reads Git's local case-sensitivity setting without invoking a shell.
+function repositoryIgnoreCase(root: vscode.Uri, deadline: number): Promise<boolean> {
+  if (root.scheme !== "file") return Promise.resolve(false);
+  const timeout = Math.max(1, deadline - Date.now());
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeout);
+    execFile("git", ["config", "--local", "--bool", "--get", "core.ignoreCase"], {
+      cwd: root.fsPath,
+      timeout,
+      windowsHide: true,
+      maxBuffer: 4096
+    }, (error, stdout) => finish(!error && stdout.trim().toLowerCase() === "true"));
+  });
+}
+
+// Checks each descended directory for containment and symbolic links before reading it.
+async function validateDirectory(root: vscode.Uri, target: vscode.Uri, deadline: number): Promise<void> {
+  if (!isInsideWorkspace(root, target)) throw new Error("Search scope must stay inside the workspace.");
+  const info = await beforeDeadline(vscode.workspace.fs.stat(target), deadline);
+  if ((info.type & vscode.FileType.SymbolicLink) !== 0 || (info.type & vscode.FileType.Directory) === 0) {
+    throw new Error("Search scope must be a directory without symbolic links.");
+  }
+}
+
 // Gets the one trusted workspace folder that this search may inspect.
 function getWorkspaceRoot(): vscode.Uri {
   const folders = vscode.workspace.workspaceFolders;
@@ -71,11 +124,11 @@ function getWorkspaceRoot(): vscode.Uri {
 
 // Rejects absolute paths and parent-directory segments in the optional scope.
 function normalizeScope(scope?: string): string[] {
-  if (!scope?.trim()) {
+  if (!scope) {
     return [];
   }
 
-  const normalized = scope.trim().replace(/\\/g, "/");
+  const normalized = scope.replace(/\\/g, "/");
 
   if (
     normalized.startsWith("/") ||
@@ -120,11 +173,13 @@ function isIgnored(
 
   for (const rule of rules) {
     let pathFromRule = relativePath;
+    const checkedRelative = rule.ignoreCase ? relativePath.toLowerCase() : relativePath;
+    const checkedDirectory = rule.ignoreCase ? rule.directory.toLowerCase() : rule.directory;
 
     if (rule.directory) {
-      if (relativePath === rule.directory) {
+      if (checkedRelative === checkedDirectory) {
         pathFromRule = "";
-      } else if (relativePath.startsWith(`${rule.directory}/`)) {
+      } else if (checkedRelative.startsWith(`${checkedDirectory}/`)) {
         pathFromRule = relativePath.slice(rule.directory.length + 1);
       } else {
         continue;
@@ -136,7 +191,7 @@ function isIgnored(
     }
 
     const checkedPath = isDirectory ? `${pathFromRule}/` : pathFromRule;
-    const result = rule.matcher.test(checkedPath);
+    const result = rule.matcher.test(rule.ignoreCase ? checkedPath.toLowerCase() : checkedPath);
 
     if (result.ignored) {
       ignored = true;
@@ -151,23 +206,29 @@ function isIgnored(
 // Reads .gitignore rules; fails safely if an existing ignore file cannot be read.
 async function readIgnoreRule(
   directoryUri: vscode.Uri,
-  relativeDirectory: string
+  relativeDirectory: string,
+  ignoreCase: boolean,
+  deadline: number
 ): Promise<IgnoreRule | undefined> {
+  const ignoreUri = vscode.Uri.joinPath(directoryUri, ".gitignore");
   try {
-    const bytes = await vscode.workspace.fs.readFile(
-      vscode.Uri.joinPath(directoryUri, ".gitignore")
-    );
+    const info = await beforeDeadline(vscode.workspace.fs.stat(ignoreUri), deadline);
+    if ((info.type & vscode.FileType.SymbolicLink) !== 0 || (info.type & vscode.FileType.File) === 0) return undefined;
+    const bytes = await beforeDeadline(vscode.workspace.fs.readFile(ignoreUri), deadline);
+    const contents = decoder.decode(bytes);
 
     return {
       directory: relativeDirectory,
-      matcher: ignore().add(decoder.decode(bytes))
+      matcher: ignore().add(ignoreCase ? contents.toLowerCase() : contents),
+      ignoreCase
     };
   } catch (error) {
+    if (error instanceof SearchDeadlineError) throw error;
     if (
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      error.code === "FileNotFound"
+      (error.code === "FileNotFound" || error.code === "ENOENT")
     ) {
       return undefined;
     }
@@ -179,7 +240,7 @@ async function readIgnoreRule(
 }
 
 // Creates a short excerpt around the match and marks it if the line was clipped.
-function makeExcerpt(line: string, query: string): {
+function makeExcerpt(line: string, query: string, matchIndex: number): {
   excerpt: string;
   truncated: boolean;
 } {
@@ -187,7 +248,6 @@ function makeExcerpt(line: string, query: string): {
     return { excerpt: line, truncated: false };
   }
 
-  const matchIndex = line.toLowerCase().indexOf(query.toLowerCase());
   const spareLength = MAX_EXCERPT_LENGTH - query.length;
   const beforeMatch = Math.floor(spareLength / 2);
   const start = Math.max(
@@ -208,13 +268,15 @@ function escapeRegExp(value: string): string {
 }
 
 // Identifies a whole identifier match, rather than a match inside a longer word.
-function isIdentifierMatch(
+function identifierMatchOffset(
   line: string,
   query: string,
   identifierPattern: RegExp
-): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(query) &&
-    identifierPattern.test(line);
+): number | undefined {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(query)) return undefined;
+  identifierPattern.lastIndex = 0;
+  const match = identifierPattern.exec(line);
+  return match ? match.index + (match[1]?.length ?? 0) : undefined;
 }
 
 // Searches bounded text files, ranks identifier matches first, and reserves budget.
@@ -241,7 +303,8 @@ export async function searchText(
 
   const workspaceRoot = getWorkspaceRoot();
   const scopeSegments = normalizeScope(scope);
-  const pathHint = options.pathHint?.trim().replace(/\\/g, "/").toLowerCase();
+  const pathHint = options.pathHint?.replace(/\\/g, "/").toLowerCase();
+  const deadline = Date.now() + Math.max(1, Math.min(options.maxTimeMs ?? MAX_SEARCH_TIME_MS, MAX_SEARCH_TIME_MS));
 
   if (
     pathHint &&
@@ -253,44 +316,42 @@ export async function searchText(
   let searchRoot = workspaceRoot;
   let searchRootRelative = "";
   let parentRules: IgnoreRule[] = [];
-
-  for (const segment of scopeSegments) {
-    if (EXCLUDED_DIRECTORIES.has(segment.toLowerCase())) {
-      throw new Error(`Search scope uses an excluded folder: ${segment}`);
-    }
-
-    const rule = await readIgnoreRule(searchRoot, searchRootRelative);
-
-    if (rule) {
-      parentRules = [...parentRules, rule];
-    }
-
-    const childRelative = searchRootRelative
-      ? `${searchRootRelative}/${segment}`
-      : segment;
-
-    if (isIgnored(childRelative, true, parentRules)) {
-      throw new Error("Search scope is excluded by .gitignore.");
-    }
-
-    searchRoot = vscode.Uri.joinPath(searchRoot, segment);
-    searchRootRelative = childRelative;
-  }
-
-  if (!isInsideWorkspace(workspaceRoot, searchRoot)) {
-    throw new Error("Search scope must stay inside the workspace.");
-  }
-
-  let scopeInfo: vscode.FileStat;
-
+  let ignoreCase = false;
   try {
-    scopeInfo = await vscode.workspace.fs.stat(searchRoot);
-  } catch {
-    throw new Error("Search scope must be an existing workspace folder.");
-  }
+    ignoreCase = await repositoryIgnoreCase(workspaceRoot, deadline);
+    await validateDirectory(workspaceRoot, workspaceRoot, deadline);
 
-  if ((scopeInfo.type & vscode.FileType.Directory) === 0) {
-    throw new Error("Search scope must be a folder.");
+    for (const segment of scopeSegments) {
+      if (EXCLUDED_DIRECTORIES.has(segment.toLowerCase())) {
+        throw new Error(`Search scope uses an excluded folder: ${segment}`);
+      }
+
+      const rule = await readIgnoreRule(searchRoot, searchRootRelative, ignoreCase, deadline);
+      if (rule) parentRules = [...parentRules, rule];
+
+      const childRelative = searchRootRelative
+        ? `${searchRootRelative}/${segment}`
+        : segment;
+
+      if (isIgnored(childRelative, true, parentRules)) {
+        throw new Error("Search scope is excluded by .gitignore.");
+      }
+
+      const childUri = vscode.Uri.joinPath(searchRoot, segment);
+      try {
+        await validateDirectory(workspaceRoot, childUri, deadline);
+      } catch (error) {
+        if (error instanceof SearchDeadlineError) throw error;
+        throw new Error("Search scope must be an existing workspace directory without symbolic links.");
+      }
+      searchRoot = childUri;
+      searchRootRelative = childRelative;
+    }
+  } catch (error) {
+    if (error instanceof SearchDeadlineError) {
+      return { results: [], contextRows: [], truncated: true, budgetExhausted: false, status: "ok" };
+    }
+    throw error;
   }
 
   const identifierPattern = new RegExp(
@@ -300,7 +361,6 @@ export async function searchText(
 
   const identifierMatches: SearchCandidate[] = [];
   const textMatches: SearchCandidate[] = [];
-  const deadline = Date.now() + Math.max(1, Math.min(options.maxTimeMs ?? MAX_SEARCH_TIME_MS, MAX_SEARCH_TIME_MS));
   let scannedFiles = 0;
   let truncated = false;
 
@@ -315,7 +375,23 @@ export async function searchText(
       return;
     }
 
-    const localRule = await readIgnoreRule(directoryUri, relativeDirectory);
+    try {
+      await validateDirectory(workspaceRoot, directoryUri, deadline);
+    } catch (error) {
+      truncated = true;
+      return;
+    }
+
+    let localRule: IgnoreRule | undefined;
+    try {
+      localRule = await readIgnoreRule(directoryUri, relativeDirectory, ignoreCase, deadline);
+    } catch (error) {
+      if (error instanceof SearchDeadlineError) {
+        truncated = true;
+        return;
+      }
+      throw error;
+    }
     const rules = localRule
       ? [...inheritedRules, localRule]
       : inheritedRules;
@@ -323,7 +399,7 @@ export async function searchText(
     let entries: [string, vscode.FileType][];
 
     try {
-      entries = await vscode.workspace.fs.readDirectory(directoryUri);
+      entries = await beforeDeadline(vscode.workspace.fs.readDirectory(directoryUri), deadline);
     } catch {
       truncated = true;
       return;
@@ -371,6 +447,11 @@ export async function searchText(
         continue;
       }
 
+      const resultPath = toRelativePath(relativePath);
+      if (options.filterPathHint && pathHint && !resultPath.toLowerCase().includes(pathHint)) {
+        continue;
+      }
+
       if (scannedFiles >= MAX_FILES_TO_SCAN) {
         truncated = true;
         return;
@@ -381,9 +462,17 @@ export async function searchText(
       let fileInfo: vscode.FileStat;
 
       try {
-        fileInfo = await vscode.workspace.fs.stat(childUri);
+        if (!isInsideWorkspace(workspaceRoot, childUri)) {
+          truncated = true;
+          continue;
+        }
+        fileInfo = await beforeDeadline(vscode.workspace.fs.stat(childUri), deadline);
       } catch {
         truncated = true;
+        continue;
+      }
+
+      if ((fileInfo.type & vscode.FileType.SymbolicLink) !== 0 || (fileInfo.type & vscode.FileType.File) === 0) {
         continue;
       }
 
@@ -395,8 +484,13 @@ export async function searchText(
       let bytes: Uint8Array;
 
       try {
-        bytes = await vscode.workspace.fs.readFile(childUri);
+        bytes = await beforeDeadline(vscode.workspace.fs.readFile(childUri), deadline);
       } catch {
+        truncated = true;
+        continue;
+      }
+
+      if (bytes.byteLength > MAX_FILE_BYTES) {
         truncated = true;
         continue;
       }
@@ -415,20 +509,26 @@ export async function searchText(
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index];
 
-        options.pattern && (options.pattern.lastIndex = 0);
-        const lineMatches = options.pattern
-          ? options.pattern.test(line)
-          : line.toLowerCase().includes(cleanQuery.toLowerCase());
+        let patternMatch: RegExpExecArray | null = null;
+        let textMatchOffset = -1;
+        if (options.pattern) {
+          options.pattern.lastIndex = 0;
+          patternMatch = options.pattern.exec(line);
+        } else {
+          textMatchOffset = line.toLowerCase().indexOf(cleanQuery.toLowerCase());
+        }
+        const lineMatches = options.pattern ? patternMatch !== null : textMatchOffset >= 0;
 
         if (!lineMatches) {
           continue;
         }
 
-        const isIdentifier = isIdentifierMatch(
+        const identifierOffset = identifierMatchOffset(
           line,
           cleanQuery,
           identifierPattern
         );
+        const isIdentifier = identifierOffset !== undefined;
         const bucket = isIdentifier ? identifierMatches : textMatches;
 
         if (bucket.length >= MAX_CANDIDATES_PER_SIGNAL) {
@@ -436,7 +536,10 @@ export async function searchText(
           continue;
         }
 
-        const excerpt = makeExcerpt(line, cleanQuery);
+        const matchOffset = identifierOffset ?? (patternMatch
+          ? patternMatch.index + (patternMatch[1]?.length ?? 0)
+          : textMatchOffset);
+        const excerpt = makeExcerpt(line, cleanQuery, Math.max(0, matchOffset));
         const result: SearchResult = {
           path: toRelativePath(relativePath),
           startLine: index + 1,

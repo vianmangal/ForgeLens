@@ -32,6 +32,10 @@
         "title": "ForgeLens: Open Agent Panel"
       },
       {
+        "command": "forgelens.copyMcpToken",
+        "title": "ForgeLens: Copy MCP Connector Token"
+      },
+      {
         "command": "forgelens.runProof",
         "title": "ForgeLens: Run Harness Proof"
       },
@@ -138,7 +142,7 @@
           }
         },
         "forgelens.mcpPort": {
-          "type": "number",
+          "type": "integer",
           "default": 8791,
           "minimum": 1,
           "maximum": 65535,

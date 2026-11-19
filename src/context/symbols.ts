@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { ContextRow } from "../shared/types";
-import type { RunContextBudget } from "./budget";
+import { RunContextBudget } from "./budget";
 import { searchText } from "./search";
 
 export interface SymbolResult {
@@ -24,6 +24,52 @@ export interface FindSymbolResponse {
 interface WorkspaceSymbolLookup {
   symbols: vscode.SymbolInformation[];
   timedOut: boolean;
+}
+
+// Charges the exact SymbolResult objects returned to the caller against its run budget.
+function reserveSymbolResults(
+  candidates: SymbolResult[],
+  budget: RunContextBudget,
+  query: string,
+  source: FindSymbolResponse["source"],
+  initiallyTruncated: boolean
+): FindSymbolResponse {
+  const results: SymbolResult[] = [];
+  const contextRows: ContextRow[] = [];
+  let truncated = initiallyTruncated || candidates.length > 30;
+  let budgetExhausted = false;
+
+  for (const candidate of candidates.slice(0, 30)) {
+    const row = budget.reserve({
+      tool: "find_symbol",
+      query,
+      path: candidate.path,
+      startLine: candidate.startLine,
+      endLine: candidate.endLine,
+      signal: "symbol_definition",
+      content: JSON.stringify(candidate)
+    });
+    contextRows.push(row);
+    if (row.exclusion === "duplicate") {
+      truncated = true;
+      continue;
+    }
+    if (!row.sentToModel) {
+      budgetExhausted = row.exclusion === "over_budget";
+      truncated = true;
+      break;
+    }
+    results.push(candidate);
+  }
+
+  return {
+    results,
+    contextRows,
+    truncated,
+    budgetExhausted,
+    source,
+    status: budgetExhausted && results.length === 0 ? "budget_exhausted" : "ok"
+  };
 }
 
 // Converts the provider's URI to a safe, forward-slash workspace path.
@@ -108,7 +154,10 @@ export async function findSymbol(
   const providerResults: SymbolResult[] = [];
 
   for (const symbol of lookup.symbols) {
-    const filePath = workspacePath(symbol.location.uri);
+    const range = symbol?.location?.range;
+    const uri = symbol?.location?.uri;
+    if (!range || !uri || !Number.isInteger(range.start?.line) || !Number.isInteger(range.end?.line)) continue;
+    const filePath = workspacePath(uri);
 
     if (!filePath) {
       continue;
@@ -118,10 +167,10 @@ export async function findSymbol(
       continue;
     }
 
-    const startLine = symbol.location.range.start.line + 1;
+    const startLine = range.start.line + 1;
     const endLine = Math.max(
       startLine,
-      symbol.location.range.end.line + 1
+      range.end.line + 1
     );
     const kind = vscode.SymbolKind[symbol.kind] ?? "symbol";
 
@@ -142,48 +191,7 @@ export async function findSymbol(
   );
 
   if (providerResults.length > 0) {
-    const results: SymbolResult[] = [];
-    const contextRows: ContextRow[] = [];
-    let truncated = lookup.timedOut || providerResults.length > 30;
-    let budgetExhausted = false;
-
-    for (const result of providerResults.slice(0, 30)) {
-      const row = budget.reserve({
-        tool: "find_symbol",
-        query: cleanName,
-        path: result.path,
-        startLine: result.startLine,
-        endLine: result.endLine,
-        signal: "symbol_definition",
-        content: JSON.stringify(result)
-      });
-
-      contextRows.push(row);
-
-      if (row.exclusion === "duplicate") {
-        truncated = true;
-        continue;
-      }
-
-      if (!row.sentToModel) {
-        budgetExhausted = true;
-        truncated = true;
-        break;
-      }
-
-      results.push(result);
-    }
-
-    return {
-      results,
-      contextRows,
-      truncated,
-      budgetExhausted,
-      source: "workspace_provider",
-      status: budgetExhausted && results.length === 0
-        ? "budget_exhausted"
-        : "ok"
-    };
+    return reserveSymbolResults(providerResults, budget, cleanName, "workspace_provider", lookup.timedOut);
   }
 
   const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -191,11 +199,12 @@ export async function findSymbol(
     `(^|[^A-Za-z0-9_$])${escapedName}(?=$|[^A-Za-z0-9_$])`,
     "i"
   );
-  const fallback = await searchText(cleanName, budget, undefined, 30, {
+  const fallback = await searchText(cleanName, new RunContextBudget(`${budget.runId}:symbol-scan`, 1_000_000), undefined, 30, {
     tool: "find_symbol",
     signal: "identifier_match",
     pattern,
     pathHint: cleanHint,
+    filterPathHint: true,
     maxTimeMs: 2000
   });
   const results = fallback.results.map(result => ({
@@ -207,12 +216,5 @@ export async function findSymbol(
     evidence: `Regex fallback matched the identifier in: ${result.excerpt}`
   }));
 
-  return {
-    results,
-    contextRows: fallback.contextRows,
-    truncated: fallback.truncated || lookup.timedOut,
-    budgetExhausted: fallback.budgetExhausted,
-    source: "regex_fallback",
-    status: fallback.status
-  };
+  return reserveSymbolResults(results, budget, cleanName, "regex_fallback", fallback.truncated || lookup.timedOut);
 }

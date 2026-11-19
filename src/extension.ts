@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { readFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import type { TrueForgeApi } from "@truefoundry/trueforge-sdk" with { "resolution-mode": "import" };
 import { Harness, type Failure, type Selection } from "./trueforge/harness";
 import { Fallback } from "./trueforge/fallback";
@@ -19,6 +20,16 @@ let listener: ReturnType<typeof listenProof> | undefined;
 let fixture: ProofFixture | undefined;
 let panel: AgentPanel;
 let start: (model: string, instruction: string, selection?: Selection) => Promise<RunState>;
+const MCP_AUTH_TOKEN_KEY = "forgelens.mcp.authToken";
+
+// Keeps the connector credential in VS Code Secret Storage instead of project files.
+async function getMcpAuthToken(context: vscode.ExtensionContext): Promise<string> {
+  const stored = await context.secrets.get(MCP_AUTH_TOKEN_KEY);
+  if (stored) return stored;
+  const token = randomBytes(32).toString("base64url");
+  await context.secrets.store(MCP_AUTH_TOKEN_KEY, token);
+  return token;
+}
 
 export function startRun(modelName: string, instruction: string, selection?: Selection) {
   return start(modelName, instruction, selection);
@@ -79,10 +90,10 @@ export async function activate(context: vscode.ExtensionContext) {
         // Keeps only active runs' ledgers; the panel already retains the displayed rows.
         if (!harness.isActive(state.runId)) clearBudgetForRun(state.runId);
       },
-      async prepareInput(runId, content, signal) {
-        const prepared = await prepareMentionInput(content, getBudgetForRun(runId), signal);
+      async prepareInput(runId, content, signal, previousState) {
+        const prepared = await prepareMentionInput(content, getBudgetForRun(runId), signal, previousState);
         panel.context(runId, prepared.contextRows);
-        return prepared.instruction;
+        return { content: prepared.instruction, state: prepared.state };
       },
       onDelta(runId, text) { if (active === harness) { output.append(text); panel.delta(runId, text); deltas.fire({ runId, text }); } },
       onApproval(runId, hunkId, toolCallId) {
@@ -156,12 +167,14 @@ export async function activate(context: vscode.ExtensionContext) {
   // Starts the local editor-tools endpoint after the review and panel APIs are ready.
   const mcpPort = config().get<number>("mcpPort", 8791);
   try {
-    mcpServer = await startMcpServer(mcpPort, server => registerForgeLensTools(server, {
+    const authToken = await getMcpAuthToken(context);
+    mcpServer = await startMcpServer(mcpPort, authToken, () => {
+      const runId = active?.state?.runId;
+      return runId && active?.isActive(runId) ? runId : undefined;
+    }, (server, requestRunId) => registerForgeLensTools(server, {
       review: editorReview,
-      currentRunId: () => {
-        const runId = active?.state?.runId;
-        return runId && active?.isActive(runId) ? runId : undefined;
-      },
+      currentRunId: () => requestRunId,
+      isRunActive: runId => active?.state?.runId === runId && active.isActive(runId),
       registerProposed,
       onContextRows: (runId, rows) => panel.context(runId, rows)
     }));
@@ -215,6 +228,10 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }));
   command("openPanel", () => panel.open());
+  command("copyMcpToken", async () => {
+    await vscode.env.clipboard.writeText(await getMcpAuthToken(context));
+    void vscode.window.showInformationMessage("ForgeLens MCP token copied. Set the connector Authorization header to Bearer <token>.");
+  });
   command("runProof", runProof);
   command("startProofConnector", async () => {
     const url = await startConnector();
