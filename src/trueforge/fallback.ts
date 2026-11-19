@@ -32,6 +32,8 @@ export class Fallback {
         this.bind(state.runId);
         if (!this.retired.has(state.runId)) hooks.onState?.(state);
       },
+      prepareInput: async (runId, content, signal) =>
+        await hooks.prepareInput?.(runId, content, signal) ?? content,
       onDelta: (runId, text) => { if (!this.retired.has(runId)) hooks.onDelta?.(runId, text); },
       onApproval: (runId, hunkId, toolCallId) => { if (!this.retired.has(runId)) hooks.onApproval?.(runId, hunkId, toolCallId); },
       onDecision: (runId, hunkId, allowed) => { if (!this.retired.has(runId)) hooks.onDecision?.(runId, hunkId, allowed); },

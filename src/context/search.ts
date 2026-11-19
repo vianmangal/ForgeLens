@@ -458,7 +458,12 @@ export async function searchText(
     ...textMatches.map(candidate => candidate.result)
   ];
 
+  // Keeps identifier matches ahead of plain text, then prefers a matching path hint.
   candidates.sort((left, right) => {
+    if (left.signal !== right.signal) {
+      return left.signal === "identifier_match" ? -1 : 1;
+    }
+
     if (pathHint) {
       const leftMatchesHint = left.path.toLowerCase().includes(pathHint);
       const rightMatchesHint = right.path.toLowerCase().includes(pathHint);
@@ -466,10 +471,6 @@ export async function searchText(
       if (leftMatchesHint !== rightMatchesHint) {
         return leftMatchesHint ? -1 : 1;
       }
-    }
-
-    if (left.signal !== right.signal) {
-      return left.signal === "identifier_match" ? -1 : 1;
     }
 
     return compareText(left.path, right.path) ||

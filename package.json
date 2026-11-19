@@ -118,6 +118,38 @@
           "default": "",
           "description": "Backup provider/model name configured in local TrueForge. Used once if the primary fails with an auth, server or network error. Leave blank to turn fallback off."
         },
+        "forgelens.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python executable used for configured run_check profiles."
+        },
+        "forgelens.checkProfiles": {
+          "type": "array",
+          "default": [],
+          "description": "Allowlisted Python check profiles selectable by run_check.",
+          "items": {
+            "type": "object",
+            "required": ["id", "args"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "forgelens.mcpPort": {
+          "type": "number",
+          "default": 8791,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback port for the ForgeLens MCP server."
+        },
+        "forgelens.contextBudget": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 0,
+          "description": "Estimated token budget shared by retrieval tools in each run."
+        },
         "forgelens.trueforgePort": {
           "type": "number",
           "default": 8790,

@@ -3,14 +3,18 @@ import { readFile } from "node:fs/promises";
 import type { TrueForgeApi } from "@truefoundry/trueforge-sdk" with { "resolution-mode": "import" };
 import { Harness, type Failure, type Selection } from "./trueforge/harness";
 import { Fallback } from "./trueforge/fallback";
-import { type RunState } from "./shared/types";
+import { type ContextRow, type RunState } from "./shared/types";
 import { listenProof, ProofFixture, proofInstruction, proofSpec } from "./proof/connector";
 import { AgentPanel } from "./ui/panel";
 import { activateReview, type ReviewApi } from "./review";
 import { instructionLabel } from "./review/store";
+import { startMcpServer, type RunningMcpServer } from "./mcp/server";
+import { clearBudgetForRun, getBudgetForRun, registerForgeLensTools } from "./mcp/tools";
+import { prepareMentionInput } from "./context/mentions";
 
 let active: Harness | undefined;
 let review: ReviewApi | undefined;
+let mcpServer: RunningMcpServer | undefined;
 let listener: ReturnType<typeof listenProof> | undefined;
 let fixture: ProofFixture | undefined;
 let panel: AgentPanel;
@@ -72,6 +76,13 @@ export async function activate(context: vscode.ExtensionContext) {
         if (active !== harness) return;
         if (state.runId !== shownRun) { shownRun = state.runId; output.appendLine("\nRun " + state.runId + " · " + state.model); }
         panel.stateChanged(state); changes.fire(state);
+        // Keeps only active runs' ledgers; the panel already retains the displayed rows.
+        if (!harness.isActive(state.runId)) clearBudgetForRun(state.runId);
+      },
+      async prepareInput(runId, content, signal) {
+        const prepared = await prepareMentionInput(content, getBudgetForRun(runId), signal);
+        panel.context(runId, prepared.contextRows);
+        return prepared.instruction;
       },
       onDelta(runId, text) { if (active === harness) { output.append(text); panel.delta(runId, text); deltas.fire({ runId, text }); } },
       onApproval(runId, hunkId, toolCallId) {
@@ -114,7 +125,52 @@ export async function activate(context: vscode.ExtensionContext) {
       try { return startRun(name, instruction); } finally { editorReview.expectRun(undefined); }
     },
     cancel,
-    decide: (id, allowed) => allowed ? approve(id) : reject(id) });
+    decide: (id, allowed) => allowed ? approve(id) : reject(id),
+    // Opens only a validated workspace-relative source range from a retrieval row.
+    openContext: async (row: ContextRow) => {
+      const folders = vscode.workspace.workspaceFolders;
+      const segments = row.path.replace(/\\/g, "/").split("/").filter(segment => segment && segment !== ".");
+      if (!vscode.workspace.isTrusted || folders?.length !== 1 || segments.length === 0 ||
+        row.path.startsWith("/") || /^[A-Za-z]:/.test(row.path) || segments.includes("..")) {
+        throw new Error("This source path is outside the trusted workspace.");
+      }
+      let checkedUri = folders[0].uri;
+      for (let index = 0; index < segments.length; index += 1) {
+        checkedUri = vscode.Uri.joinPath(checkedUri, segments[index]);
+        const stat = await vscode.workspace.fs.stat(checkedUri);
+        const isLastSegment = index === segments.length - 1;
+        if ((stat.type & vscode.FileType.SymbolicLink) !== 0 ||
+          (isLastSegment ? (stat.type & vscode.FileType.File) === 0 : (stat.type & vscode.FileType.Directory) === 0)) {
+          throw new Error("This source path is no longer a regular workspace file.");
+        }
+      }
+      const document = await vscode.workspace.openTextDocument(checkedUri);
+      const start = Math.min(Math.max(0, row.startLine - 1), document.lineCount - 1);
+      const end = Math.min(Math.max(start, row.endLine - 1), document.lineCount - 1);
+      const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
+      const editor = await vscode.window.showTextDocument(document);
+      editor.selection = new vscode.Selection(range.start, range.end);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+    }
+  });
+  // Starts the local editor-tools endpoint after the review and panel APIs are ready.
+  const mcpPort = config().get<number>("mcpPort", 8791);
+  try {
+    mcpServer = await startMcpServer(mcpPort, server => registerForgeLensTools(server, {
+      review: editorReview,
+      currentRunId: () => {
+        const runId = active?.state?.runId;
+        return runId && active?.isActive(runId) ? runId : undefined;
+      },
+      registerProposed,
+      onContextRows: (runId, rows) => panel.context(runId, rows)
+    }));
+    context.subscriptions.push({ dispose: () => { void mcpServer?.dispose(); } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    output.appendLine(message);
+    void vscode.window.showErrorMessage(message);
+  }
   context.subscriptions.push(editorReview.connectHarness({
     startRun: (instruction, selection) => startRun(model(), instruction, selection),
     approve, reject, cancel, onState: changes.event, onDelta: deltas.event, onApproval: approvals.event,
@@ -173,6 +229,18 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export async function deactivate() {
-  try { if (active?.state && active.isActive(active.state.runId)) await cancel(); }
-  finally { if (listener) await (await listener).close(); listener = undefined; fixture = undefined; active = undefined; }
+  try {
+    if (active?.state && active.isActive(active.state.runId)) await cancel();
+  } finally {
+    const runningMcpServer = mcpServer;
+    mcpServer = undefined;
+    try {
+      await runningMcpServer?.dispose();
+    } finally {
+      if (listener) await (await listener).close();
+      listener = undefined;
+      fixture = undefined;
+      active = undefined;
+    }
+  }
 }

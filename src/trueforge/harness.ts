@@ -20,6 +20,7 @@ export interface Failure {
 
 export interface HarnessHooks {
   onState?(state: RunState): void;
+  prepareInput?(runId: string, content: string, signal: AbortSignal): Promise<string>;
   onDelta?(runId: string, text: string): void;
   onApproval?(runId: string, hunkId: string, toolCallId: string): void;
   onDecision?(runId: string, hunkId: string, allowed: boolean): void;
@@ -125,10 +126,25 @@ export class Harness {
     const run = new Run(modelName);
     if (replacesRunId) run.state.replacesRunId = replacesRunId;
     this.current = run;
-    const content = selection ? instruction + "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection) : instruction;
-    run.finished = this.execute(run, content);
     this.publish(run);
+    run.finished = this.prepareAndExecute(run, instruction, selection);
     return run.finished;
+  }
+
+  // Resolves and budgets explicit context before opening a TrueForge session.
+  private async prepareAndExecute(run: Run, instruction: string, selection?: Selection): Promise<RunState> {
+    try {
+      let content = await this.hooks.prepareInput?.(run.state.runId, instruction, run.controller.signal) ?? instruction;
+      if (!run.active) return { ...run.state };
+      if (selection) content += "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection);
+      return await this.execute(run, content);
+    } catch (error) {
+      if (run.active) {
+        const message = messageOf(error);
+        this.stop(run, failureKind(error, message), message);
+      }
+      return { ...run.state };
+    }
   }
 
   approve(hunkId: string): boolean {

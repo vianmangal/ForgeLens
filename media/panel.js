@@ -40,6 +40,38 @@ function updateCards(rows) {
     card.querySelectorAll("button").forEach(button => { button.disabled = row.status !== "pending"; });
   }
 }
+// Shows retrieval cost and lets the developer open the cited workspace range.
+function updateContextRows(rows) {
+  const section = el("context-section");
+  const container = el("context-rows");
+  container.replaceChildren();
+  section.hidden = !rows.length;
+  for (const row of rows) {
+    const card = document.createElement("article");
+    const title = document.createElement("strong");
+    title.textContent = row.path + ":" + row.startLine + "-" + row.endLine;
+    const detail = document.createElement("p");
+    detail.textContent = row.tool + " · " + row.query + " · " + row.signal;
+    const cost = document.createElement("p");
+    cost.textContent = row.costTokens + " tokens · " + row.cumulativeTokens + " total" +
+      (row.exclusion ? " · excluded: " + row.exclusion : row.sentToModel ? "" : " · excluded: not sent");
+    card.append(title, detail, cost);
+    if (row.path && row.startLine > 0) {
+      const button = document.createElement("button");
+      button.textContent = "Open source";
+      button.onclick = () => vscode.postMessage({
+        type: "openContext",
+        runId,
+        path: row.path,
+        startLine: row.startLine,
+        endLine: row.endLine
+      });
+      card.append(button);
+    }
+    container.append(card);
+  }
+}
+
 window.addEventListener("message", ({ data }) => {
   if (data.type === "delta" && data.runId === runId) {
     el("reply-section").hidden = false;
@@ -58,5 +90,6 @@ window.addEventListener("message", ({ data }) => {
   el("reply-section").hidden = !data.text;
   el("reply").textContent = data.text;
   updateCards(data.rows);
+  updateContextRows(data.contextRows || []);
 });
 vscode.postMessage({ type: "ready" });
