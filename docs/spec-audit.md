@@ -4,7 +4,7 @@ Audited on 20 November 2026 against `origin/main` at `b367a05`. Gaps that could 
 
 Status key: **done** means implemented with automated evidence. **partial** means implemented but missing a piece. **missing** means not implemented. **live** means the code path exists but the spec's claim needs a real model, TrueForge session or recording to verify.
 
-Commands run on the branch: `npm ci`, `npm test` (117 pass, 0 fail; 88 on `main`), `npm run build` (clean), `npm run test:host` (see the PR description).
+Commands run on the branch: `npm ci`, `npm test` (117 pass, 0 fail; 88 on `main`), `npm run build` (clean), `npm run test:host` (8 pass, 0 fail on VS Code 1.147.0).
 
 ## §2–3 Product behaviour and architecture
 
