@@ -71,16 +71,23 @@ Only the TrueForge event source is a local fixture passed through `review.connec
 
 The first run downloads stable VS Code and requires network access. Set `VSCODE_VERSION` to select another release, or `VSCODE_EXECUTABLE_PATH` to an existing VS Code executable to run offline. Download or launch failures exit nonzero; they must not be reported as passing host tests. See the [VS Code extension testing guide](https://code.visualstudio.com/api/working-with-extensions/testing-extension).
 
-Verified on macOS with installed VS Code 1.146.0: **8 passed, 0 failed**. The unit suite passes **60 tests**. This verifies the editor client; the real Person 3 tool integration remains a separate check.
+Last verified on macOS on 20 November 2026 with downloaded VS Code 1.147.0: **8 passed, 0 failed**. The unit suite then passed **120 tests**. The host cases verify the editor client. The workspace tools reach the same review store, and their unit tests are in `test/mcp-tools.test.cjs`.
 
 ## Agent-panel layout proposal
 
 The [proposal on PR #1](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977657430) keeps the native, keyboard-accessible ForgeLens Review Explorer as the grouped multi-file list. Existing panel approval rows continue to submit through `approve`/`reject` and synchronize with review via `onDecision`. Vian can optionally add an **Open review** link by adding `enableCommandUris: ["forgelens.review.focus"],` to the webview options and `<a href="command:forgelens.review.focus">Open review</a>` to its HTML. Layout agreement and the optional panel change are pending Vian; no panel or media files were changed here.
 
-## Person 3 integration audit, 18 November 2026
+## Person 3 tool integration status, 20 November 2026
 
-After `git fetch --all`, the remote branches were `main`, `feat/editor-review`, `feat/models-resilience`, `feat/retrieval-mcp`, and `feat/verification-submission`. `origin/HEAD` points to `origin/main`.
+The 18 November audit found that `feat/retrieval-mcp` had only the isolated proof fixture. That gap is closed. [PR #4](https://github.com/vianmangal/ForgeLens/pull/4) merged the workspace tools into `main` on 19 November, and `src/mcp/tools.ts` now uses the review store directly:
 
-`origin/feat/retrieval-mcp` still points to `20e3199f57a2dc643abfe73afef9421734ba06b8`. Its only `read_range` and `propose_edit` implementations are the isolated proof fixture. They return snapshot/hunk IDs and register the fixture hunk against the owning harness run before returning it, rejecting inactive owners. They do not call `review.store.captureSnapshot(document)` or `review.store.propose(runId, snapshotId, request)`, register the review store's returned hunk IDs, or propagate its errors. That branch does not yet export `review`.
+- `read_range` calls `review.store.captureSnapshot(document)` on the open buffer and returns its `snapshotId`. It also records that the snapshot was issued to the current run.
+- `propose_edit` checks two things before calling `review.store.propose(runId, snapshotId, request)`:
+  - the snapshot came from `read_range` in this run
+  - the snapshot still matches the live buffer
 
-The [PR audit comment](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977666371) links the exact registration and tool code. The real workspace tool → review → TrueForge approval integration remains pending Person 3's implementation and a joint live check. The remote branch was inspected without checkout or modification.
+  It then calls `registerProposed(runId, hunkId)` for every returned ID before replying. Store errors such as an ambiguous anchor, an overlap or a repeated rejected change go back to the model unchanged.
+- `approve_hunk` checks that the hunk belongs to the current run. It then reports the decision recorded through `onDecision`, or the direction the developer has already queued.
+- Every tool call is bound to the run whose TrueForge turn announced the connector's MCP session (`src/mcp/server.ts`).
+
+Unit tests cover this path in `test/mcp-tools.test.cjs`. The extension-host cases still use a local event fixture. A live session through the team connector, with the competition model, remains the outstanding check (see [docs/spec-audit.md](spec-audit.md)).

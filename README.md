@@ -60,7 +60,7 @@ Use Node 22.14 or later, desktop VS Code and Ollama. Run the following from this
    node scripts/register-agent.mjs forgelens-local/qwen-proof
    ```
 
-`examples/trueforge-connector.json` and `examples/vscode-settings.json` show the connector and settings without credentials. `demo/vscode-settings.json` adds the Flask CLI test profile for `run_check`.
+`examples/trueforge-connector.json` and `examples/vscode-settings.json` show the connector and settings without credentials. With no `forgelens.checkProfiles` setting, `run_check` offers one profile, `pytest`, which runs `forgelens.pythonPath -m pytest -q` in the workspace root. The tool description lists the configured profile IDs. `demo/vscode-settings.json` replaces the default with a Flask CLI test profile.
 
 The team manifest explicitly exposes six MCP tools. Search, symbol lookup, range reads, edit proposals and hunk approvals are preloaded. The model can discover `run_check` when needed. Only `approve_hunk` requires a human decision. The proof uses its own connector and three bounded tools, so it can run before Person 3 ships the team connector. [TrueForge SDK guide](https://trueforge.dev/api/use-agent) · [Deferred tool loading](https://trueforge.dev/key-features/deferred-tool-loading)
 
@@ -84,7 +84,50 @@ Inline edit (`Ctrl+Alt+E`), the native diff, per-change Accept/Reject, atomic Ap
 
 ## What this checkout verifies
 
-`npm test` covers streaming, event correlation, bounded follow-up, interrupted and replayed streams, cancellation, failure classification and the fixture. The live host exercises the installed extension, TrueForge and Ollama. Workspace search, the full review store, budget accounting, fallback policy and the three competition demonstrations depend on the other team contributions.
+`npm test` runs 120 unit tests. They need no TrueForge server, model or VS Code window:
+
+- **Harness** (`test/harness.test.cjs`):
+  - streamed deltas, and approval correlation, including approvals reached through deferred `call_tool` discovery
+  - batched decisions, plus interrupted and replayed streams
+  - the one-time missing-approval follow-up
+  - cancellation while streaming and while paused
+  - MCP session ownership, and the installed SDK's wire format
+- **Fallback** (`test/fallback.test.cjs`):
+  - failure classification
+  - one switch to the backup after an auth, server or network failure, and no switch on cancel or tool errors
+  - no replay once `run_check` may have run
+  - late primary events ignored, and the selection re-charged to the backup run
+- **MCP connector and tools** (`test/mcp-session.test.cjs`, `test/mcp-tools.test.cjs`):
+  - bearer authentication and per-session run binding
+  - tool contracts that match the agent manifest
+  - `read_range` shortening, and snapshot ownership and staleness checks
+  - `approve_hunk` decision reporting
+  - `run_check` profiles, command reporting and cancellation
+- **Retrieval and budget** (`test/retrieval-context.test.cjs`, `test/context-budget.test.cjs`):
+  - `.gitignore` handling, definition-first ranking with a forced-small budget, and symbol scoping and the picker
+  - inline-selection charging
+  - the 4-bytes-per-token estimate, and the cap under concurrent calls
+- **Review** (`test/review-*.test.cjs`, `test/selection-fallback.test.cjs`):
+  - hunk construction, overlap and anchor rules, and rejected-hunk finality
+  - atomic Apply, conflict detection and undo bookkeeping
+  - Edit Selection following a backup run
+- **Configuration** (`test/agent-manifest.test.cjs`, `test/examples.test.cjs`, `test/proof.test.cjs`):
+  - agent instructions and deferred tool loading
+  - example files without credentials
+  - the proof fixture
+
+`npm run test:host` runs eight cases in a real VS Code extension host; [docs/editor-review.md](docs/editor-review.md#extension-host-checks) lists them. They cover per-hunk Apply and native undo across one and three files, conflict refusal, cancellation, version-only conflicts, fallback invalidation and bulk decisions. The TrueForge event source in those cases is a local fixture. The last run passed 8 of 8 on VS Code 1.147.0.
+
+The live results below used the installed extension, TrueForge and Ollama with the isolated proof connector.
+
+These still need a real model:
+
+- the team connector end to end
+- Tasks A, B and C
+- a second model
+- a clean-machine setup
+
+[docs/spec-audit.md](docs/spec-audit.md) tracks each requirement and its evidence.
 
 ### Live results on 17 November 2026
 
