@@ -60,6 +60,8 @@ Use Node 22.14 or later, desktop VS Code and Ollama. Run the following from this
    node scripts/register-agent.mjs forgelens-local/qwen-proof
    ```
 
+`examples/trueforge-connector.json` and `examples/vscode-settings.json` show the connector and settings without credentials. `demo/vscode-settings.json` adds the Flask CLI test profile for `run_check`.
+
 The team manifest explicitly exposes six MCP tools. Search, symbol lookup, range reads, edit proposals and hunk approvals are preloaded. The model can discover `run_check` when needed. Only `approve_hunk` requires a human decision. The proof uses its own connector and three bounded tools, so it can run before Person 3 ships the team connector. [TrueForge SDK guide](https://trueforge.dev/api/use-agent) · [Deferred tool loading](https://trueforge.dev/key-features/deferred-tool-loading)
 
 ## Teammate integration

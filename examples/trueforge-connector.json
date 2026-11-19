@@ -1,0 +1,12 @@
+{
+  "name": "forgelens",
+  "type": "remote",
+  "description": "ForgeLens editor tools: bounded workspace search, symbol lookup, range reads, edit proposals, hunk approvals and configured checks.",
+  "url": "http://127.0.0.1:8791/mcp",
+  "auth": {
+    "type": "header",
+    "headers": {
+      "Authorization": "Bearer <paste the value from ForgeLens: Copy MCP Connector Token>"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "forgelens.primaryModel": "<provider>/<model>",
+  "forgelens.backupModel": "<backup-provider>/<model>",
+  "forgelens.mcpPort": 8791,
+  "forgelens.trueforgePort": 8790,
+  "forgelens.contextBudget": 6000,
+  "forgelens.pythonPath": "<absolute path to the workspace's Python executable>",
+  "forgelens.checkProfiles": [
+    { "id": "tests", "args": ["-m", "pytest", "-q"] }
+  ]
+}
