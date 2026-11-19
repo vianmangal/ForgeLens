@@ -25,7 +25,7 @@ const snapshotsByRun = new Map<string, Set<string>>();
 const encoder = new TextEncoder();
 export const DEFAULT_CONTEXT_BUDGET = 6000;
 export const MAX_READ_LINES = 300;
-const DECISION_WAIT_MS = 60_000;
+const DECISION_WAIT_MS = 15_000;
 const MAX_CHECK_OUTPUT_CHARS = 16_000;
 const MAX_CHECK_RUNTIME_MS = 120_000;
 const CHECK_KILL_GRACE_MS = 1_000;
@@ -68,7 +68,8 @@ function issueSnapshot(runId: string, snapshotId: string): void {
 function waitForDecision(context: ForgeLensToolContext, runId: string, hunkId: string, signal: AbortSignal): Promise<void> {
   const settled = () => {
     const hunk = context.review.store.getHunk(hunkId);
-    return !context.isRunActive(runId) || !hunk || (hunk.status !== "proposed" && hunk.status !== "approval_requested");
+    return !context.isRunActive(runId) || !hunk || (hunk.status !== "proposed" && hunk.status !== "approval_requested") ||
+      context.review.store.queuedDecision(hunkId) === "accepted";
   };
   if (settled() || signal.aborted) return Promise.resolve();
   return new Promise(resolve => {
@@ -447,7 +448,7 @@ export function registerApproveHunkTool(
       if (!hunk || currentRun(context) !== runId || hunk.status === "invalidated") {
         return result({ status: "cancelled", hunkId, message: "The run ended before this hunk was decided." });
       }
-      if (hunk.status === "accepted") {
+      if (hunk.status === "accepted" || (hunk.status === "approval_requested" && context.review.store.queuedDecision(hunkId) === "accepted")) {
         return result({ status: "accepted", hunkId, message: "The developer accepted this hunk. It is applied together with the other accepted hunks when the developer chooses Apply." });
       }
       if (hunk.status === "rejected") {

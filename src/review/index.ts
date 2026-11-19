@@ -195,7 +195,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     }
     const queued = allow ? link.approve(id) : link.reject(id, REJECT_REASON);
     if (queued) {
-      store.markQueued(id);
+      store.markQueued(id, allow ? "accepted" : "rejected");
     }
     return queued;
   };

@@ -365,3 +365,17 @@ test("conflict indicators require both the snapshot version and hash", () => {
   store.refreshConflicts(doc(uri.toString(), text, 1));
   assert.equal(store.isConflicted(run.runId, uri), false);
 });
+
+test("a queued decision remembers its direction until the harness records it", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-u");
+  const snap = store.captureSnapshot(doc("file:///u.py", text));
+  const [id] = store.propose(run.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 9" }).hunkIds;
+  store.markApprovalRequested(id, "call-1");
+  store.markQueued(id, "rejected");
+  assert.equal(store.isQueued(id), true);
+  assert.equal(store.queuedDecision(id), "rejected");
+  store.decide(id, "rejected");
+  assert.equal(store.isQueued(id), false);
+  assert.equal(store.queuedDecision(id), undefined);
+});

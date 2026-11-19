@@ -61,7 +61,7 @@ export class ReviewStore implements vscode.Disposable {
   private readonly snapshots = new Map<string, SnapshotRecord>();
   private readonly snapshotIdByKey = new Map<string, string>();
   private readonly conflicted = new Set<string>();
-  private readonly queued = new Set<HunkId>();
+  private readonly queued = new Map<HunkId, Decision | undefined>();
   private chain: Promise<unknown> = Promise.resolve();
 
   private readonly changeEmitter = new vscode.EventEmitter<RunId | undefined>();
@@ -286,14 +286,18 @@ export class ReviewStore implements vscode.Disposable {
     return true;
   }
 
-  markQueued(hunkId: HunkId): void {
-    this.queued.add(hunkId);
+  markQueued(hunkId: HunkId, decision?: Decision): void {
+    this.queued.set(hunkId, decision);
     const hunk = this.hunks.get(hunkId);
     this.changeEmitter.fire(hunk?.runId);
   }
 
   isQueued(hunkId: HunkId): boolean {
     return this.queued.has(hunkId);
+  }
+
+  queuedDecision(hunkId: HunkId): Decision | undefined {
+    return this.queued.get(hunkId);
   }
 
   decide(hunkId: HunkId, decision: Decision, reason?: string): boolean {

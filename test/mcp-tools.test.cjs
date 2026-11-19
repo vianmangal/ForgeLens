@@ -234,3 +234,16 @@ test("cancelling the run stops a running check promptly and reports it as cancel
   assert.doesNotMatch(outcome.stdout, /finished/);
   assert.ok(Date.now() - started < 5000);
 });
+
+test("approve_hunk answers at once when the developer's acceptance is queued but not yet recorded", async t => {
+  const { store, call } = await setup(t);
+  const read = await call("read_range", { path: "a.py", startLine: 1, endLine: 5 });
+  const [hunkId] = (await call("propose_edit", { snapshotId: read.snapshotId, oldText: "two", newText: "TWO" })).hunkIds;
+  store.markApprovalRequested(hunkId, "call-1");
+  store.markQueued(hunkId, "accepted");
+  const started = Date.now();
+  const outcome = await call("approve_hunk", { hunkId });
+  assert.equal(outcome.status, "accepted");
+  assert.ok(Date.now() - started < 200);
+  assert.equal(store.getHunk(hunkId).status, "approval_requested");
+});
