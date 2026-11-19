@@ -254,6 +254,12 @@ export class ReviewStore implements vscode.Disposable {
     if (!result.ok) {
       return result;
     }
+    const rejected = this.hunksOfRun(runId).filter((h) => h.snapshotId === base.snapshotId && h.status === "rejected");
+    const repeated = result.hunks.find((raw) => rejected.some((h) =>
+      h.startLine === raw.startLine && h.endLine === raw.endLine && h.oldText === raw.oldText && h.newText === raw.newText));
+    if (repeated) {
+      return { ok: false, error: `The developer already rejected this exact change at line ${repeated.startLine}. That decision is final; do not propose it again.` };
+    }
     run.baseByUri.set(key, base.snapshotId);
     const ids: HunkId[] = [];
     for (const raw of result.hunks) {
