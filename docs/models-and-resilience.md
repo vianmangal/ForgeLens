@@ -44,10 +44,10 @@ Keys are entered in TrueForge's Settings, never in this repo.
   Treat as auth: 401, 403, and **400 whose message says the API key is not valid** (Gemini's real behaviour).
 - Overload, server error (5xx), timeout, 429: TrueForge already retries twice, so switch to the backup after its final failure.
 - User pressed Cancel: never switch.
+- If the primary may have executed `run_check`, stop and show the original failure. Check the command result before retrying manually. The harness stops automatic replay as soon as it sees the check awaiting approval. The TrueForge session UI can approve it even if the extension loses its subscription before seeing the result.
 - On a switch: discard the primary's pending hunks, start a new session on the backup with the same instruction and selection, show "Primary model failed → using backup".
 - Both models fail: one clear error, and the run ends.
 
 ## Still to do
 
 - Test both models on the team's own MCP tools once the harness server is up.
-- 18 Nov: write the fallback code using the harness's `startRun` and `onRunFailed`.

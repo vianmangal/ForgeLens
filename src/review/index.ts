@@ -278,6 +278,9 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
       async (progress, token) => {
         let runId: RunId | undefined;
         const listeners = [
+          connected.onState((state) => {
+            if (runId && state.replacesRunId === runId) runId = state.runId;
+          }),
           connected.onDelta((e) => {
             if (e.runId === runId) {
               progress.report({ message: e.text.replace(/\s+/g, " ").slice(-80) });
@@ -289,7 +292,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
             }
           })
         ];
-        token.onCancellationRequested(() => {
+        listeners.push(token.onCancellationRequested(() => {
           if (runId) {
             void store.requestCancel(runId).then((outcome) => {
               if (outcome.alreadyApplied) {
@@ -297,7 +300,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
               }
             });
           }
-        });
+        }));
         try {
           nextLabel = { kind: "inline", label: instructionLabel(instruction), instruction };
           const finishedState = connected.startRun(instruction, {
@@ -332,7 +335,8 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
           if (harnessRuns.has(state.runId)) {
             return;
           }
-          const meta = nextLabel ?? { kind: "agent" as const, label: `Agent task ${state.runId.slice(0, 8)}`, instruction: undefined };
+          const previous = state.replacesRunId ? store.getRun(state.replacesRunId) : undefined;
+          const meta = previous ?? nextLabel ?? { kind: "agent" as const, label: `Agent task ${state.runId.slice(0, 8)}`, instruction: undefined };
           nextLabel = undefined;
           store.createRun(meta.kind, meta.label, state.runId, meta.instruction);
           harnessRuns.add(state.runId);

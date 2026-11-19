@@ -37,6 +37,7 @@ export interface ContextRow {
 
 export interface RunState {
   runId: RunId;
+  replacesRunId?: RunId;
   sessionId: string;
   turnId?: string;
   lastEventId?: string;

@@ -113,6 +113,11 @@
           "default": "",
           "description": "Full provider/model name configured in local TrueForge."
         },
+        "forgelens.backupModel": {
+          "type": "string",
+          "default": "",
+          "description": "Backup provider/model name configured in local TrueForge. Used once if the primary fails with an auth, server or network error. Leave blank to turn fallback off."
+        },
         "forgelens.trueforgePort": {
           "type": "number",
           "default": 8790,
