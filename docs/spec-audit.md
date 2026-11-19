@@ -1,6 +1,6 @@
 # Spec audit: `main` against `docs/spec.md`
 
-Audited on 20 November 2026 against `origin/main` at `b367a05`. Gaps that could be fixed without a live model run are fixed on `fix/spec-gaps`; those rows say **fixed here** and cite the new test. Every new regression test was also run against the previous source and failed for the expected reason. The only exception is the abort test for `approve_hunk`, which guards against a hang the old code could not have.
+Audited on 20 November 2026 against `origin/main` at `b367a05`. Gaps that could be fixed without a live model run are fixed on `fix/spec-gaps`; those rows say **fixed here** and cite the new test. Each test written for a fix was also run against the previous source and failed for the expected reason. Three added tests cover behaviour that already worked and pass on both: `cancelling the run stops a running check promptly…`, `duplicates and over-budget content are recorded…` and `a zero budget sends nothing…`. The `approve_hunk` abort test also passes on both, because it guards against a hang the old code could not have.
 
 Status key: **done** means implemented with automated evidence. **partial** means implemented but missing a piece. **missing** means not implemented. **live** means the code path exists but the spec's claim needs a real model, TrueForge session or recording to verify.
 
