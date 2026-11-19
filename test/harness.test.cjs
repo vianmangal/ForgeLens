@@ -457,3 +457,16 @@ test("approve_hunk reached through deferred tool discovery is gated like a prelo
   assert.deepEqual(submitted.map(e => [e.toolCallId, e.approval.status]), [["d1", "allow"], ["d2", "deny"], ["d3", "deny"]]);
   assert.match(submitted[1].approval.reason, /final; do not propose the same change again/);
 });
+
+test("the selection returned by prepareSelection is what the first turn sends", async () => {
+  const selection = { path: "a.ts", startLine: 3, endLine: 5, text: "one\ntwo\nthree\n" };
+  const seen = [];
+  const { harness, observed } = fixture({}, {
+    prepareSelection: (runId, value) => { seen.push([runId, value]); return { ...value, text: "one\n", truncated: true }; }
+  });
+  await harness.startRun("p/m", "Edit", selection);
+  assert.deepEqual(seen, [[observed.states[0].runId, selection]]);
+  const sent = observed.api.find(([kind]) => kind === "turn")[2].input[0].content;
+  assert.match(sent, /"text":"one\\n","truncated":true/);
+  assert.doesNotMatch(sent, /three/);
+});

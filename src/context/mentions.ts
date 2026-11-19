@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ContextRow } from "../shared/types";
-import { RunContextBudget } from "./budget";
+import type { Selection } from "../trueforge/harness";
+import { RunContextBudget, type ContextCharge } from "./budget";
 import { findSymbol } from "./symbols";
 
 interface MentionSource {
@@ -212,6 +213,38 @@ export async function prepareMentionInput(
 
   output.push(instruction.slice(cursor));
   return { instruction: output.join(""), contextRows, state: { entries } };
+}
+
+export function budgetSelection(selection: Selection, budget: RunContextBudget): { selection: Selection; row?: ContextRow } {
+  if (selection.text === undefined) return { selection };
+  const estimate = (value: Selection) => Math.ceil(encoder.encode(JSON.stringify(value)).byteLength / 4);
+  const charge = (sent: Selection, endLine: number, truncated: boolean): ContextCharge => ({
+    tool: "selection",
+    query: `${selection.path}:${selection.startLine}-${selection.endLine}`,
+    path: selection.path,
+    startLine: selection.startLine,
+    endLine,
+    signal: "explicit_mention",
+    content: JSON.stringify(sent),
+    truncated
+  });
+  if (estimate(selection) <= budget.remainingTokens) {
+    return { selection, row: budget.reserve(charge(selection, selection.endLine, false)) };
+  }
+  const lines = selection.text.split(/(?<=\n)/);
+  let fitted: Selection = { ...selection, text: "", truncated: true };
+  let shownLines = 0;
+  for (const line of lines) {
+    const candidate: Selection = { ...selection, text: fitted.text + line, truncated: true };
+    if (estimate(candidate) > budget.remainingTokens) break;
+    fitted = candidate;
+    shownLines += 1;
+  }
+  if (!shownLines) {
+    return { selection: fitted, row: budget.recordOverBudget(charge(fitted, selection.startLine, true)) };
+  }
+  const endLine = Math.min(selection.endLine, selection.startLine + shownLines - 1);
+  return { selection: fitted, row: budget.reserve(charge(fitted, endLine, true)) };
 }
 
 function isMentionPreparationState(value: unknown): value is MentionPreparationState {

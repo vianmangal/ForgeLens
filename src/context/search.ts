@@ -9,7 +9,7 @@ export interface SearchResult {
   startLine: number;
   endLine: number;
   excerpt: string;
-  signal: "identifier_match" | "text_match";
+  signal: "symbol_definition" | "identifier_match" | "text_match";
   truncated: boolean;
 }
 
@@ -60,6 +60,8 @@ const EXCLUDED_DIRECTORIES = new Set([
 ]);
 
 const decoder = new TextDecoder("utf-8");
+const SIGNAL_RANK: Record<SearchResult["signal"], number> = { symbol_definition: 0, identifier_match: 1, text_match: 2 };
+const DEFINITION_KEYWORDS = "(?:def|class|function\\*?|func|fn|interface|type|struct|enum|trait|module|const|let|var)";
 
 class SearchDeadlineError extends Error {}
 
@@ -359,6 +361,13 @@ export async function searchText(
     "i"
   );
 
+  const definitionPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(cleanQuery)
+    ? new RegExp(
+      `^\\s*(?:(?:export|default|public|private|protected|static|pub|async|abstract)\\s+)*${DEFINITION_KEYWORDS}\\s+${escapeRegExp(cleanQuery)}(?=$|[^A-Za-z0-9_$])`,
+      "i"
+    )
+    : undefined;
+  const definitionMatches: SearchCandidate[] = [];
   const identifierMatches: SearchCandidate[] = [];
   const textMatches: SearchCandidate[] = [];
   let scannedFiles = 0;
@@ -529,7 +538,8 @@ export async function searchText(
           identifierPattern
         );
         const isIdentifier = identifierOffset !== undefined;
-        const bucket = isIdentifier ? identifierMatches : textMatches;
+        const isDefinition = isIdentifier && definitionPattern !== undefined && definitionPattern.test(line);
+        const bucket = isDefinition ? definitionMatches : isIdentifier ? identifierMatches : textMatches;
 
         if (bucket.length >= MAX_CANDIDATES_PER_SIGNAL) {
           truncated = true;
@@ -545,7 +555,7 @@ export async function searchText(
           startLine: index + 1,
           endLine: index + 1,
           excerpt: excerpt.excerpt,
-          signal: isIdentifier ? "identifier_match" : "text_match",
+          signal: isDefinition ? "symbol_definition" : isIdentifier ? "identifier_match" : "text_match",
           truncated: excerpt.truncated
         };
 
@@ -557,6 +567,7 @@ export async function searchText(
   await walk(searchRoot, searchRootRelative, parentRules);
 
   const candidates = [
+    ...definitionMatches.map(candidate => candidate.result),
     ...identifierMatches.map(candidate => candidate.result),
     ...textMatches.map(candidate => candidate.result)
   ];
@@ -564,7 +575,7 @@ export async function searchText(
   // Keeps identifier matches ahead of plain text, then prefers a matching path hint.
   candidates.sort((left, right) => {
     if (left.signal !== right.signal) {
-      return left.signal === "identifier_match" ? -1 : 1;
+      return SIGNAL_RANK[left.signal] - SIGNAL_RANK[right.signal];
     }
 
     if (pathHint) {

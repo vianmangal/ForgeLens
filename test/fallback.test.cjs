@@ -290,3 +290,30 @@ for (const serverName of ["forgelens", "other"]) {
     }
   });
 }
+
+test("the backup run charges the selection to its own run and sends its prepared text", async () => {
+  const charged = [];
+  const turns = [];
+  const fallback = new Fallback({ backupModel: () => "backup/model", notice() {}, problem() {} });
+  const hooks = fallback.guard({
+    prepareSelection: (runId, value) => { charged.push(runId); return { ...value, text: "prepared-" + charged.length }; }
+  });
+  const sessions = {
+    create: async body => ({ data: { id: body.agent.spec.model.name } }),
+    createTurnStream: async (sid, body) => {
+      turns.push([sid, body.input[0].content]);
+      return sid === "primary/model" ? events(created(), done("error", { message: "401 Unauthorized" })) : backupWorks();
+    },
+    cancel: async () => {}
+  };
+  const harness = new Harness(sessions, { model: { name: "default/model" }, instructions: "Use the connector." }, hooks);
+  const runs = [];
+  harness.onRunFailed(failure => runs.push(failure.runId));
+  fallback.attach(harness);
+  const state = await fallback.start("primary/model", "Edit", selection);
+  assert.equal(state.model, "backup/model");
+  assert.deepEqual(charged, [runs[0], state.runId]);
+  assert.notEqual(runs[0], state.runId);
+  assert.match(turns[0][1], /"text":"prepared-1"/);
+  assert.match(turns[1][1], /"text":"prepared-2"/);
+});

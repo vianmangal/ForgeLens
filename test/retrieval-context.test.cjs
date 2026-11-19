@@ -26,11 +26,11 @@ const vscode = {
   }
 };
 const originalLoad = Module._load;
-let searchText, prepareMentionInput;
+let searchText, prepareMentionInput, budgetSelection;
 try {
   Module._load = function(name, ...args) { return name === "vscode" ? vscode : originalLoad.call(this, name, ...args); };
   ({ searchText } = require("../dist/context/search.js"));
-  ({ prepareMentionInput } = require("../dist/context/mentions.js"));
+  ({ prepareMentionInput, budgetSelection } = require("../dist/context/mentions.js"));
 } finally {
   Module._load = originalLoad;
 }
@@ -76,4 +76,50 @@ test("a confirmed fuzzy symbol uses the selected name even if the definition mov
   const result = await prepareMentionInput("@symbol(load)", new RunContextBudget("test", 1000), new AbortController().signal);
   assert.deepEqual(names, ["load", "loadConfig"]);
   assert.match(result.instruction, /2: function loadConfig\(\)/);
+});
+
+test("search ranks a definition above a similarly named file's call sites and plain text, then truncates at a small budget", async t => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "tasks"));
+  await fs.mkdir(path.join(root, "docs"));
+  await fs.mkdir(path.join(root, "node_modules"));
+  await fs.writeFile(path.join(root, "tasks", "commands.py"), "import os\n\ndef run_command(name):\n    return name\n");
+  await fs.writeFile(path.join(root, "tasks", "command.py"), "from tasks.commands import run_command\n\nprint(run_command('x'))\n");
+  await fs.writeFile(path.join(root, "docs", "usage.txt"), "Use run_commands to batch several.\n");
+  await fs.writeFile(path.join(root, "node_modules", "dep.py"), "def run_command():\n    pass\n");
+  const full = await searchText("run_command", new RunContextBudget("full", 10_000));
+  assert.deepEqual(full.results.map(r => [r.path, r.startLine, r.signal]), [
+    ["tasks/commands.py", 3, "symbol_definition"],
+    ["tasks/command.py", 1, "identifier_match"],
+    ["tasks/command.py", 3, "identifier_match"],
+    ["docs/usage.txt", 1, "text_match"]
+  ]);
+  assert.equal(full.budgetExhausted, false);
+  const limit = full.contextRows[0].costTokens + full.contextRows[1].costTokens;
+  const small = new RunContextBudget("small", limit);
+  const bounded = await searchText("run_command", small);
+  assert.deepEqual(bounded.results.map(r => r.path), ["tasks/commands.py", "tasks/command.py"]);
+  assert.equal(bounded.results[0].signal, "symbol_definition");
+  assert.equal(bounded.budgetExhausted, true);
+  assert.equal(bounded.truncated, true);
+  assert.deepEqual(bounded.contextRows.map(row => [row.sentToModel, row.exclusion]), [[true, undefined], [true, undefined], [false, "over_budget"]]);
+  assert.ok(small.cumulativeTokens <= limit);
+  assert.ok(bounded.contextRows.every(row => row.limitTokens === limit && row.cumulativeTokens <= limit));
+});
+
+test("an inline selection is charged to the run budget and shortened by whole lines when it does not fit", () => {
+  const selection = { path: "a.py", startLine: 10, endLine: 12, text: "def f():\n    return 1\n    # " + "x".repeat(60) + "\n", documentVersion: 3 };
+  const roomy = new RunContextBudget("roomy", 1000);
+  const whole = budgetSelection(selection, roomy);
+  assert.equal(whole.selection, selection);
+  assert.deepEqual([whole.row.tool, whole.row.sentToModel, whole.row.startLine, whole.row.endLine], ["selection", true, 10, 12]);
+  assert.equal(whole.row.costTokens, Math.ceil(Buffer.byteLength(JSON.stringify(selection)) / 4));
+  const twoLines = { ...selection, text: "def f():\n    return 1\n", truncated: true };
+  const tight = new RunContextBudget("tight", Math.ceil(Buffer.byteLength(JSON.stringify(twoLines)) / 4));
+  const partial = budgetSelection(selection, tight);
+  assert.deepEqual(partial.selection, twoLines);
+  assert.deepEqual([partial.row.exclusion, partial.row.endLine, tight.remainingTokens], ["truncated", 11, 0]);
+  const none = budgetSelection(selection, new RunContextBudget("none", 5));
+  assert.deepEqual([none.selection.text, none.selection.truncated, none.row.exclusion, none.row.costTokens], ["", true, "over_budget", 0]);
+  assert.deepEqual(budgetSelection({ path: "a.py", startLine: 1, endLine: 1 }, roomy), { selection: { path: "a.py", startLine: 1, endLine: 1 } });
 });

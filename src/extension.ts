@@ -11,7 +11,7 @@ import { activateReview, type ReviewApi } from "./review";
 import { instructionLabel } from "./review/store";
 import { startMcpServer, type RunningMcpServer } from "./mcp/server";
 import { clearBudgetForRun, getBudgetForRun, registerForgeLensTools } from "./mcp/tools";
-import { prepareMentionInput } from "./context/mentions";
+import { budgetSelection, prepareMentionInput } from "./context/mentions";
 
 let active: Harness | undefined;
 let review: ReviewApi | undefined;
@@ -94,6 +94,11 @@ export async function activate(context: vscode.ExtensionContext) {
         const prepared = await prepareMentionInput(content, getBudgetForRun(runId), signal, previousState);
         panel.context(runId, prepared.contextRows);
         return { content: prepared.instruction, state: prepared.state };
+      },
+      prepareSelection(runId, selection) {
+        const prepared = budgetSelection(selection, getBudgetForRun(runId));
+        if (prepared.row) panel.context(runId, [prepared.row]);
+        return prepared.selection;
       },
       onDelta(runId, text) { if (active === harness) { output.append(text); panel.delta(runId, text); deltas.fire({ runId, text }); } },
       onApproval(runId, hunkId, toolCallId) {

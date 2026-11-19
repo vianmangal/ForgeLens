@@ -40,6 +40,7 @@ export class Fallback {
         if (typeof prepared !== "string" && plan) plan.preparedState = prepared.state;
         return prepared;
       },
+      prepareSelection: (runId, selection) => hooks.prepareSelection ? hooks.prepareSelection(runId, selection) : selection,
       onDelta: (runId, text) => { if (!this.retired.has(runId)) hooks.onDelta?.(runId, text); },
       onApproval: (runId, hunkId, toolCallId) => { if (!this.retired.has(runId)) hooks.onApproval?.(runId, hunkId, toolCallId); },
       onDecision: (runId, hunkId, allowed) => { if (!this.retired.has(runId)) hooks.onDecision?.(runId, hunkId, allowed); },

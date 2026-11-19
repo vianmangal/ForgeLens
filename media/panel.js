@@ -74,7 +74,8 @@ function updateContextRows(rows) {
     const state = row.sentToModel
       ? row.exclusion === "truncated" ? "sent (truncated)" : "sent"
       : row.exclusion === "duplicate" ? "already included" : "excluded: " + (row.exclusion || "not sent");
-    entry.cost.textContent = row.costTokens + " tokens · " + row.cumulativeTokens + " total · " + state;
+    entry.cost.textContent = row.costTokens + " estimated source tokens · " + row.cumulativeTokens +
+      (typeof row.limitTokens === "number" ? " of " + row.limitTokens : "") + " used this run · " + state;
     entry.button.hidden = !row.path || row.startLine <= 0;
     if (entry.card.parentElement !== container) container.append(entry.card);
   }
