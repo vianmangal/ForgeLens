@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import type { RunState } from "../shared/types";
+import type { ContextRow, RunState } from "../shared/types";
 import type { ProofHunk } from "../proof/connector";
 
 type Row = { hunkId: string; detail?: ProofHunk; status: "pending" | "sending" | "accepted" | "rejected" };
@@ -8,6 +8,7 @@ export interface PanelActions {
   run(instruction: string): Promise<unknown>;
   cancel(): Promise<void>;
   decide(id: string, allow: boolean): boolean;
+  openContext(row: ContextRow): Promise<void>;
 }
 
 export class AgentPanel {
@@ -15,6 +16,7 @@ export class AgentPanel {
   private state?: RunState;
   private transcript = "";
   private rows = new Map<string, Row>();
+  private contextRows: ContextRow[] = [];
   private error = "";
 
   constructor(private root: vscode.Uri, private actions: PanelActions) {}
@@ -31,12 +33,14 @@ export class AgentPanel {
     panel.webview.html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}'">
       <link rel="stylesheet" href="${style}"></head><body><main><h1>ForgeLens</h1>
-      <form id="form"><label for="task">Repository task</label><textarea id="task" required rows="3"></textarea>
+      <form id="form"><label for="task">Repository task</label><textarea id="task" required rows="3" placeholder="Optional context: @file(path/to/file) or @symbol(name)"></textarea>
       <button id="run">Run task</button><button id="cancel" type="button" hidden>Cancel run</button></form>
       <p id="status" role="status"></p><p id="error" role="alert"></p><section id="approvals" aria-label="Hunk approvals"></section>
+      <section id="context-section"><h2>Retrieved context</h2><div id="context-rows"></div></section>
       <section id="reply-section" hidden><h2>Model reply</h2><pre id="reply"></pre></section></main><script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => { this.panel = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
+      const initiatingRunId = message.runId;
       try {
         if (message.type === "ready") this.refresh();
         if (message.type === "run" && typeof message.text === "string") await this.actions.run(message.text);
@@ -49,13 +53,25 @@ export class AgentPanel {
             this.refresh();
           }
         }
-      } catch (error) { this.problem(String(error)); }
+        if (message.type === "openContext") {
+          const row = this.contextRows.find(item =>
+            item.path === message.path &&
+            item.startLine === message.startLine &&
+            item.endLine === message.endLine
+          );
+          if (row) await this.actions.openContext(row);
+        }
+      } catch (error) {
+        if (message.type === "openContext" && initiatingRunId !== this.state?.runId) return;
+        this.problem(String(error));
+      }
     });
   }
 
   stateChanged(state: RunState) {
     if (state.runId !== this.state?.runId) {
       this.rows.clear();
+      this.contextRows = [];
       this.transcript = "";
       this.error = "";
     }
@@ -67,6 +83,13 @@ export class AgentPanel {
     if (this.state?.runId !== runId) return;
     this.transcript += text;
     void this.panel?.webview.postMessage({ type: "delta", runId, text });
+  }
+
+  // Adds budget-accounted retrieval rows for the currently active run.
+  context(runId: string, rows: ContextRow[]) {
+    if (this.state?.runId !== runId) return;
+    this.contextRows = [...this.contextRows, ...rows.filter(row => row.runId === runId)].slice(-100);
+    this.refresh();
   }
 
   approval(id: string, detail?: ProofHunk) {
@@ -85,6 +108,6 @@ export class AgentPanel {
 
   private refresh() {
     void this.panel?.webview.postMessage({ type: "view", state: this.state, text: this.transcript,
-      rows: [...this.rows.values()], error: this.error });
+      rows: [...this.rows.values()], contextRows: this.contextRows, error: this.error });
   }
 }

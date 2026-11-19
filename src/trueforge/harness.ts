@@ -13,17 +13,23 @@ export interface Selection {
 export interface Failure {
   runId: string;
   model: string;
-  kind: "auth" | "network" | "server" | "cancelled" | "tool";
+  kind: "auth" | "network" | "server" | "cancelled" | "tool" | "input";
   message: string;
   checkMayHaveRun?: boolean;
 }
 
 export interface HarnessHooks {
   onState?(state: RunState): void;
+  prepareInput?(runId: string, content: string, signal: AbortSignal, previousState?: unknown): Promise<string | PreparedInput>;
   onDelta?(runId: string, text: string): void;
   onApproval?(runId: string, hunkId: string, toolCallId: string): void;
   onDecision?(runId: string, hunkId: string, allowed: boolean): void;
   onInvalidate?(runId: string): void;
+}
+
+export interface PreparedInput {
+  content: string;
+  state?: unknown;
 }
 
 type Events = AsyncIterable<Api.TurnStreamingEvent>;
@@ -42,10 +48,12 @@ class Run {
   pending = new Map<string, Call>();
   wake?: () => void;
   opening?: Promise<unknown>;
+  sessionOpening = false;
   finished?: Promise<RunState>;
   cancellation?: Promise<void>;
   drainError?: Error;
   checkMayHaveRun = false;
+  mcpSessionId?: string;
   terminalTurn = false;
   openedTurn = false;
   lastMessage = new Map<string, Api.ModelMessageEvent>();
@@ -103,6 +111,11 @@ export class Harness {
     return this.current?.state.runId === runId && this.current.active;
   }
 
+  runForMcpSession(sessionId: string): string | undefined {
+    const run = this.current;
+    return run?.active && run.mcpSessionId === sessionId ? run.state.runId : undefined;
+  }
+
   onRunFailed(callback: (failure: Failure) => void): () => void {
     this.failures.add(callback);
     return () => { this.failures.delete(callback); };
@@ -125,10 +138,29 @@ export class Harness {
     const run = new Run(modelName);
     if (replacesRunId) run.state.replacesRunId = replacesRunId;
     this.current = run;
-    const content = selection ? instruction + "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection) : instruction;
-    run.finished = this.execute(run, content);
     this.publish(run);
+    run.finished = this.prepareAndExecute(run, instruction, selection);
     return run.finished;
+  }
+
+  // Resolves and budgets explicit context before opening a TrueForge session.
+  private async prepareAndExecute(run: Run, instruction: string, selection?: Selection): Promise<RunState> {
+    let prepared: string | PreparedInput;
+    try {
+      prepared = this.hooks.prepareInput
+        ? await this.hooks.prepareInput(run.state.runId, instruction, run.controller.signal)
+        : instruction;
+    } catch (error) {
+      if (run.active) {
+        const message = messageOf(error);
+        this.stop(run, "input", message);
+      }
+      return { ...run.state };
+    }
+    if (!run.active) return { ...run.state };
+    let content = typeof prepared === "string" ? prepared : prepared.content;
+    if (selection) content += "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection);
+    return this.execute(run, content);
   }
 
   approve(hunkId: string): boolean {
@@ -155,12 +187,14 @@ export class Harness {
     if (run.cancellation) return run.cancellation;
     if (!run.active && run.state.status !== "ready_to_apply") return Promise.resolve();
     this.stop(run, "cancelled", "Cancelled by the developer.");
+    if (!run.state.sessionId && !run.sessionOpening) run.controller.abort();
     run.cancellation = this.cancelAndDrain(run);
     return run.cancellation;
   }
 
   private async cancelAndDrain(run: Run): Promise<void> {
     try {
+      if (!run.state.sessionId && !run.sessionOpening) run.controller.abort();
       await run.opening?.catch(() => {});
       if (run.state.sessionId && !run.terminalTurn) {
         await this.sessions.cancel(run.state.sessionId, {}, request);
@@ -191,11 +225,13 @@ export class Harness {
 
   private async execute(run: Run, content: string): Promise<RunState> {
     try {
+      run.sessionOpening = true;
       const opening = this.sessions.create({
         agent: { spec: { ...this.spec, model: { ...this.spec.model, name: run.state.model } } }
       }, run.options);
       run.opening = opening;
       run.state.sessionId = (await opening).data.id;
+      run.sessionOpening = false;
       let sentReminder = false;
       while (run.active) {
         const previousTurnId = run.state.turnId;
@@ -238,6 +274,7 @@ export class Harness {
         run.drainError = new Error("Unable to confirm the end of the cancelled turn: " + messageOf(error));
       }
     } finally {
+      run.sessionOpening = false;
       run.controller.abort();
       run.wake = undefined;
     }
@@ -306,6 +343,11 @@ export class Harness {
       return "done";
     }
     if (!run.active) return;
+    if (event.type === "mcp.initialize") {
+      const server = event.mcpServers.find(server => server.name === this.connector);
+      if (server) run.mcpSessionId = server.sessionId;
+      return;
+    }
     if (event.type === "model.message" || event.type === "model.message.delta") {
       this.modelMessage(run, event);
       return;

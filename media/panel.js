@@ -8,6 +8,7 @@ el("form").onsubmit = event => {
 };
 el("cancel").onclick = () => vscode.postMessage({ type: "cancel", runId });
 const cards = new Map();
+const contextCards = new Map();
 function updateCards(rows) {
   for (const [id, card] of cards) {
     if (!rows.some(row => row.hunkId === id)) { card.remove(); cards.delete(id); }
@@ -40,6 +41,50 @@ function updateCards(rows) {
     card.querySelectorAll("button").forEach(button => { button.disabled = row.status !== "pending"; });
   }
 }
+// Shows retrieval cost and lets the developer open the cited workspace range.
+function updateContextRows(rows) {
+  const section = el("context-section");
+  const container = el("context-rows");
+  section.hidden = !rows.length;
+  const currentKeys = new Set();
+  for (const row of rows) {
+    const key = JSON.stringify([row.runId, row.tool, row.query, row.path, row.startLine, row.endLine, row.cumulativeTokens]);
+    currentKeys.add(key);
+    let entry = contextCards.get(key);
+    if (!entry) {
+      const card = document.createElement("article");
+      const title = document.createElement("strong");
+      const detail = document.createElement("p");
+      const cost = document.createElement("p");
+      const button = document.createElement("button");
+      button.textContent = "Open source";
+      button.onclick = () => vscode.postMessage({
+        type: "openContext",
+        runId,
+        path: row.path,
+        startLine: row.startLine,
+        endLine: row.endLine
+      });
+      card.append(title, detail, cost, button);
+      entry = { card, title, detail, cost, button };
+      contextCards.set(key, entry);
+    }
+    entry.title.textContent = row.path + ":" + row.startLine + "-" + row.endLine;
+    entry.detail.textContent = row.tool + " · " + row.query + " · " + row.signal;
+    const state = row.sentToModel
+      ? row.exclusion === "truncated" ? "sent (truncated)" : "sent"
+      : row.exclusion === "duplicate" ? "already included" : "excluded: " + (row.exclusion || "not sent");
+    entry.cost.textContent = row.costTokens + " tokens · " + row.cumulativeTokens + " total · " + state;
+    entry.button.hidden = !row.path || row.startLine <= 0;
+    if (entry.card.parentElement !== container) container.append(entry.card);
+  }
+  for (const [key, entry] of contextCards) {
+    if (currentKeys.has(key)) continue;
+    entry.card.remove();
+    contextCards.delete(key);
+  }
+}
+
 window.addEventListener("message", ({ data }) => {
   if (data.type === "delta" && data.runId === runId) {
     el("reply-section").hidden = false;
@@ -58,5 +103,6 @@ window.addEventListener("message", ({ data }) => {
   el("reply-section").hidden = !data.text;
   el("reply").textContent = data.text;
   updateCards(data.rows);
+  updateContextRows(data.contextRows || []);
 });
 vscode.postMessage({ type: "ready" });

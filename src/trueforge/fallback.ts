@@ -10,6 +10,7 @@ export interface FallbackOptions {
 interface Plan {
   instruction: string;
   selection?: Selection;
+  preparedState?: unknown;
   primary?: Failure;
   next?: Promise<RunState>;
   followBackup?: (backup: Promise<RunState>) => void;
@@ -31,6 +32,13 @@ export class Fallback {
       onState: state => {
         this.bind(state.runId);
         if (!this.retired.has(state.runId)) hooks.onState?.(state);
+      },
+      prepareInput: async (runId, content, signal) => {
+        const plan = this.plans.get(runId);
+        // Carries resolved mention choices forward; each run charges them to its own ledger.
+        const prepared = await hooks.prepareInput?.(runId, content, signal, plan?.preparedState) ?? content;
+        if (typeof prepared !== "string" && plan) plan.preparedState = prepared.state;
+        return prepared;
       },
       onDelta: (runId, text) => { if (!this.retired.has(runId)) hooks.onDelta?.(runId, text); },
       onApproval: (runId, hunkId, toolCallId) => { if (!this.retired.has(runId)) hooks.onApproval?.(runId, hunkId, toolCallId); },
@@ -77,6 +85,10 @@ export class Fallback {
 
   private failed(failure: Failure) {
     if (failure.kind === "cancelled") return;
+    if (failure.kind === "input") {
+      this.options.problem(failure.message);
+      return;
+    }
     const plan = this.plans.get(failure.runId);
     if (!plan || plan.next) {
       this.options.problem(failure.message);
@@ -99,7 +111,12 @@ export class Fallback {
     this.retired.add(failure.runId);
     this.invalidate(failure.runId);
     try {
-      plan.next = this.run(backup, { instruction: plan.instruction, selection: plan.selection, primary: failure });
+      plan.next = this.run(backup, {
+        instruction: plan.instruction,
+        selection: plan.selection,
+        preparedState: plan.preparedState,
+        primary: failure
+      });
     } catch (error) {
       this.options.problem("Primary model failed (" + failure.message + ") and backup model " + backup +
         " could not start: " + (error instanceof Error ? error.message : String(error)));

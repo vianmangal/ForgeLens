@@ -399,3 +399,33 @@ test("losing the stream before its first frame recovers the accepted turn withou
   assert.equal(creates, 1);
   assert.deepEqual(observed.text, ["answer"]);
 });
+
+test("only the active run's announced ForgeLens MCP session owns its tools", async () => {
+  const { harness, sessions } = fixture();
+  let previous;
+  for (const sessionId of ["first", "replacement"]) {
+    const announced = deferred();
+    const finish = deferred();
+    sessions.createTurnStream = async () => (async function* () {
+      yield created();
+      yield { type: "mcp.initialize", id: "init", mcpServers: [
+        { name: "other", sessionId: "foreign" }, { name: "forgelens", sessionId }
+      ] };
+      announced.resolve();
+      await finish.promise;
+      yield done();
+    })();
+    const run = harness.startRun("model", "Read the selection");
+    await announced.promise;
+    try {
+      assert.equal(harness.runForMcpSession(sessionId), harness.state.runId);
+      assert.equal(harness.runForMcpSession("foreign"), undefined);
+      if (previous) assert.equal(harness.runForMcpSession(previous), undefined);
+    } finally {
+      finish.resolve();
+      await run;
+    }
+    assert.equal(harness.runForMcpSession(sessionId), undefined);
+    previous = sessionId;
+  }
+});
