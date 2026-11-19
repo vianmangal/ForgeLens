@@ -12,6 +12,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export type CurrentRunId = () => string | undefined;
 
+export interface CheckProfile {
+  id: string;
+  args: string[];
+}
+
 export interface ForgeLensToolContext {
   review: ReviewApi;
   currentRunId: CurrentRunId;
@@ -26,6 +31,7 @@ const encoder = new TextEncoder();
 export const DEFAULT_CONTEXT_BUDGET = 6000;
 export const MAX_READ_LINES = 300;
 const DECISION_WAIT_MS = 15_000;
+export const DEFAULT_CHECK_PROFILES: readonly CheckProfile[] = [{ id: "pytest", args: ["-m", "pytest", "-q"] }];
 const MAX_CHECK_OUTPUT_CHARS = 16_000;
 const MAX_CHECK_RUNTIME_MS = 120_000;
 const CHECK_KILL_GRACE_MS = 1_000;
@@ -85,6 +91,28 @@ function waitForDecision(context: ForgeLensToolContext, runId: string, hunkId: s
     const timer = setTimeout(finish, DECISION_WAIT_MS);
     signal.addEventListener("abort", finish, { once: true });
   });
+}
+
+export function configuredCheckProfiles(): CheckProfile[] {
+  const configured = vscode.workspace
+    .getConfiguration("forgelens")
+    .get<unknown>("checkProfiles", DEFAULT_CHECK_PROFILES);
+  const entries: unknown[] = Array.isArray(configured) ? configured : [...DEFAULT_CHECK_PROFILES];
+  const profiles: CheckProfile[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null || !("id" in entry) || !("args" in entry)) continue;
+    const { id, args } = entry;
+    if (typeof id !== "string" || !id.trim() || !Array.isArray(args) || !args.every(arg => typeof arg === "string")) continue;
+    if (profiles.some(profile => profile.id === id)) continue;
+    profiles.push({ id, args: [...args] });
+  }
+  return profiles;
+}
+
+function profileList(profiles: CheckProfile[]): string {
+  return profiles.length
+    ? "Available profile IDs: " + profiles.map(profile => profile.id).join(", ") + "."
+    : "No check profiles are configured; set forgelens.checkProfiles to enable checks.";
 }
 
 function result(value: unknown, isError = false) {
@@ -467,11 +495,12 @@ export function registerRunCheckTool(
   server: McpServer,
   context: ForgeLensToolContext
 ): void {
+  const available = profileList(configuredCheckProfiles());
   server.registerTool(
     "run_check",
     {
-      description: "Run one check profile configured by the developer, such as a test suite, in the workspace root with its configured Python executable and arguments. Returns the command, working directory, exit code and bounded stdout/stderr. Run it only after the developer has applied and saved the accepted edits; an earlier run is only a baseline.",
-      inputSchema: { checkId: z.string().min(1).max(128).describe("ID of a configured check profile.") }
+      description: "Run one check profile configured by the developer, such as a test suite, in the workspace root with its configured Python executable and arguments. Returns the command, working directory, exit code and bounded stdout/stderr. Run it only after the developer has applied and saved the accepted edits; an earlier run is only a baseline. " + available,
+      inputSchema: { checkId: z.string().min(1).max(128).describe("ID of a configured check profile. " + available) }
     },
     async ({ checkId }, extra) => {
       const runId = currentRun(context);
@@ -483,15 +512,10 @@ export function registerRunCheckTool(
         return result({ status: "error", message: "Open one trusted workspace folder before running checks." }, true);
       }
 
-      const profiles = vscode.workspace.getConfiguration("forgelens").get<unknown[]>("checkProfiles", []);
-      const profile = profiles.find(value =>
-        typeof value === "object" &&
-        value !== null &&
-        "id" in value &&
-        value.id === checkId
-      ) as { id: string; args?: unknown } | undefined;
-      if (!profile || !Array.isArray(profile.args) || !profile.args.every(arg => typeof arg === "string")) {
-        return result({ status: "error", message: "Unknown check profile or invalid profile arguments." }, true);
+      const profiles = configuredCheckProfiles();
+      const profile = profiles.find(value => value.id === checkId);
+      if (!profile) {
+        return result({ status: "error", message: `Unknown check profile "${checkId}". ${profileList(profiles)}` }, true);
       }
 
       const pythonPath = vscode.workspace.getConfiguration("forgelens").get<string>("pythonPath", "python").trim();

@@ -67,13 +67,14 @@ try {
 }
 const agent = require("../agent/forgelens.agent.json");
 
-async function setup(t, files = { "a.py": "one\ntwo\nthree\nfour\nfive\n" }) {
+async function setup(t, files = { "a.py": "one\ntwo\nthree\nfour\nfive\n" }, initialSettings = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "forgelens-tools-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   for (const [name, text] of Object.entries(files)) await fs.writeFile(path.join(root, name), text);
   vscode.workspace.workspaceFolders = [{ uri: new Uri(root) }];
   documents.clear();
   settings.clear();
+  for (const [key, value] of Object.entries(initialSettings)) settings.set(key, value);
   const store = new ReviewStore();
   const registered = {};
   const state = { runId: "run-" + Math.random().toString(16).slice(2), active: true };
@@ -246,4 +247,42 @@ test("approve_hunk answers at once when the developer's acceptance is queued but
   assert.equal(outcome.status, "accepted");
   assert.ok(Date.now() - started < 200);
   assert.equal(store.getHunk(hunkId).status, "approval_requested");
+});
+
+test("a default pytest profile ships and run_check lists it when nothing is configured", async t => {
+  const manifest = require("../package.json");
+  assert.deepEqual(manifest.contributes.configuration.properties["forgelens.checkProfiles"].default, tools.DEFAULT_CHECK_PROFILES);
+  assert.deepEqual(tools.DEFAULT_CHECK_PROFILES, [{ id: "pytest", args: ["-m", "pytest", "-q"] }]);
+  const { registered, call, root } = await setup(t);
+  assert.match(registered.run_check.config.description, /Available profile IDs: pytest\.$/);
+  assert.match(registered.run_check.config.inputSchema.checkId.description, /Available profile IDs: pytest\./);
+  settings.set("pythonPath", process.execPath);
+  const outcome = await call("run_check", { checkId: "pytest" });
+  assert.deepEqual(outcome.command, [process.execPath, "-m", "pytest", "-q"]);
+  assert.equal(outcome.cwd, root);
+});
+
+test("run_check lists only valid, unique configured profile IDs and names them for an unknown ID", async t => {
+  const checkProfiles = [
+    { id: "cli-tests", args: ["-m", "pytest", "tests/test_cli.py", "-q"] },
+    { id: "lint", args: ["-m", "ruff", "check"] },
+    { id: "cli-tests", args: ["-c", "print('shadowed')"] },
+    { id: "broken", args: "not-a-list" },
+    { id: "", args: [] },
+    { args: ["-V"] }
+  ];
+  const { registered, call } = await setup(t, undefined, { checkProfiles });
+  assert.match(registered.run_check.config.description, /Available profile IDs: cli-tests, lint\.$/);
+  assert.deepEqual(tools.configuredCheckProfiles().map(profile => profile.args), [["-m", "pytest", "tests/test_cli.py", "-q"], ["-m", "ruff", "check"]]);
+  const unknown = await call("run_check", { checkId: "pytest" });
+  assert.equal(unknown.isError, true);
+  assert.match(unknown.message, /Unknown check profile "pytest"\. Available profile IDs: cli-tests, lint\./);
+  const broken = await call("run_check", { checkId: "broken" });
+  assert.equal(broken.isError, true);
+});
+
+test("an empty profile list disables checks and says how to enable them", async t => {
+  const { registered, call } = await setup(t, undefined, { checkProfiles: [] });
+  assert.match(registered.run_check.config.description, /No check profiles are configured; set forgelens\.checkProfiles/);
+  assert.match((await call("run_check", { checkId: "pytest" })).message, /No check profiles are configured/);
 });
