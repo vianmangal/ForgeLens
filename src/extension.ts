@@ -168,16 +168,14 @@ export async function activate(context: vscode.ExtensionContext) {
   const mcpPort = config().get<number>("mcpPort", 8791);
   try {
     const authToken = await getMcpAuthToken(context);
-    mcpServer = await startMcpServer(mcpPort, authToken, () => {
-      const runId = active?.state?.runId;
-      return runId && active?.isActive(runId) ? runId : undefined;
-    }, (server, requestRunId) => registerForgeLensTools(server, {
-      review: editorReview,
-      currentRunId: () => requestRunId,
-      isRunActive: runId => active?.state?.runId === runId && active.isActive(runId),
-      registerProposed,
-      onContextRows: (runId, rows) => panel.context(runId, rows)
-    }));
+    mcpServer = await startMcpServer(mcpPort, authToken, sessionId => active?.runForMcpSession(sessionId),
+      (server, currentRunId) => registerForgeLensTools(server, {
+        review: editorReview,
+        currentRunId,
+        isRunActive: runId => active?.state?.runId === runId && active.isActive(runId),
+        registerProposed,
+        onContextRows: (runId, rows) => panel.context(runId, rows)
+      }));
     context.subscriptions.push({ dispose: () => { void mcpServer?.dispose(); } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

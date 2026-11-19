@@ -53,6 +53,7 @@ class Run {
   cancellation?: Promise<void>;
   drainError?: Error;
   checkMayHaveRun = false;
+  mcpSessionId?: string;
   terminalTurn = false;
   openedTurn = false;
   lastMessage = new Map<string, Api.ModelMessageEvent>();
@@ -108,6 +109,11 @@ export class Harness {
 
   isActive(runId: string): boolean {
     return this.current?.state.runId === runId && this.current.active;
+  }
+
+  runForMcpSession(sessionId: string): string | undefined {
+    const run = this.current;
+    return run?.active && run.mcpSessionId === sessionId ? run.state.runId : undefined;
   }
 
   onRunFailed(callback: (failure: Failure) => void): () => void {
@@ -337,6 +343,11 @@ export class Harness {
       return "done";
     }
     if (!run.active) return;
+    if (event.type === "mcp.initialize") {
+      const server = event.mcpServers.find(server => server.name === this.connector);
+      if (server) run.mcpSessionId = server.sessionId;
+      return;
+    }
     if (event.type === "model.message" || event.type === "model.message.delta") {
       this.modelMessage(run, event);
       return;

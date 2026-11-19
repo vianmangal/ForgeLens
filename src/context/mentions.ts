@@ -83,18 +83,18 @@ async function resolveSymbolMention(name: string, runId: string, signal: AbortSi
   let current = selected;
   let document = await openMentionDocument(current.path);
   if (signal.aborted) throw new Error("Mention loading was cancelled.");
-  if (!symbolExistsInRange(document, current, name)) {
-    const refreshed = await findSymbol(name, new RunContextBudget(`${runId}:mention-refresh`, 1_000_000), current.path);
-    const refreshedExact = refreshed.results.filter(result => result.name.toLowerCase() === name.toLowerCase());
+  if (!symbolExistsInRange(document, current)) {
+    const refreshed = await findSymbol(selected.name, new RunContextBudget(`${runId}:mention-refresh`, 1_000_000), current.path);
+    const refreshedExact = refreshed.results.filter(result => result.name.toLowerCase() === selected.name.toLowerCase());
     if (!refreshedExact.length) {
       throw new Error(`The location for "${name}" changed. Search for it again and choose its current location.`);
     }
-    const confirmed = await chooseSymbol(refreshedExact, name, signal);
+    const confirmed = await chooseSymbol(refreshedExact, selected.name, signal);
     if (!confirmed) throw new Error(`Choose the current location for @symbol(${name}) to continue.`);
     current = confirmed;
     document = await openMentionDocument(current.path);
     if (signal.aborted) throw new Error("Mention loading was cancelled.");
-    if (!symbolExistsInRange(document, current, name)) {
+    if (!symbolExistsInRange(document, current)) {
       throw new Error(`The location for "${name}" changed again. Search for it again and choose its current location.`);
     }
   }
@@ -111,9 +111,9 @@ async function resolveSymbolMention(name: string, runId: string, signal: AbortSi
 }
 
 // Verifies a provider's line range still contains the chosen identifier in the current buffer.
-function symbolExistsInRange(document: vscode.TextDocument, symbol: { startLine: number; endLine: number }, name: string): boolean {
+function symbolExistsInRange(document: vscode.TextDocument, symbol: { name: string; startLine: number; endLine: number }): boolean {
   if (symbol.startLine < 1 || symbol.endLine < symbol.startLine || symbol.endLine > document.lineCount) return false;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = symbol.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escaped}(?=$|[^A-Za-z0-9_$])`, "i");
   for (let line = symbol.startLine; line <= symbol.endLine; line += 1) {
     if (pattern.test(document.lineAt(line - 1).text)) return true;

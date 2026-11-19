@@ -191,7 +191,7 @@ function isIgnored(
     }
 
     const checkedPath = isDirectory ? `${pathFromRule}/` : pathFromRule;
-    const result = rule.matcher.test(rule.ignoreCase ? checkedPath.toLowerCase() : checkedPath);
+    const result = rule.matcher.test(checkedPath);
 
     if (result.ignored) {
       ignored = true;
@@ -219,7 +219,7 @@ async function readIgnoreRule(
 
     return {
       directory: relativeDirectory,
-      matcher: ignore().add(ignoreCase ? contents.toLowerCase() : contents),
+      matcher: ignore({ ignoreCase }).add(contents),
       ignoreCase
     };
   } catch (error) {
