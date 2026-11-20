@@ -8,7 +8,7 @@ Placeholders only. Enter real keys in the TrueForge UI (`http://localhost:8790`,
 | --- | --- |
 | Provider type | Built-in `google-gemini` |
 | API key | `<GEMINI_API_KEY>` (entered in TrueForge only) |
-| Model ID | `gemini-3-1-flash-lite` |
+| Upstream model ID | `gemini-3.1-flash-lite` |
 | Model name in TrueForge | `<primary-model-name>` |
 | Hosting / cost | Google cloud, free tier. `TODO: confirm cost` |
 
