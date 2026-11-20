@@ -36,7 +36,7 @@ Run on the `fix/spec-gaps` build against Flask `22d92470`, with real developer a
 | Task | Result |
 | --- | --- |
 | A, inline edit | Two hunks (docstring and false-value set). After Apply and Save, `demo/check_task_a.sh` passed every case (`off`, `OFF`, `n`, `N`, `0`, `false`, `no`, empty and unset return False; `1` returns True). Undo Last Apply restored the original function. |
-| B, agent mode | Seven hunks across four files: `src/flask/cli.py`, `tests/test_cli.py`, `docs/cli.rst`, `docs/api.rst`. The new command sits after `routes_command` and is registered in `FlaskGroup`. `demo/check_task_b.sh` passed: masked JSON, the `timedelta` default serialised, `flask --help` lists `config`, 57 CLI tests passed and 3 skipped. |
+| B, agent mode | Five hunks across three files: `src/flask/cli.py`, `tests/test_cli.py`, `docs/cli.rst`. The new command sits after `routes_command` and is registered in `FlaskGroup`. `demo/check_task_b.sh` passed: masked JSON, the `timedelta` default serialised, `flask --help` lists `config`, 56 CLI tests passed and 3 skipped. |
 | C, model failure | Primary set to a custom provider at an unreachable endpoint (`http://127.0.0.1:65530/v1`). The run failed with a connection error and switched automatically to `ollama/qwen3-8b`. qwen3:8b described the change in text and proposed no hunk. `git status --short` was empty before and after. |
 
 Notes from these runs:
