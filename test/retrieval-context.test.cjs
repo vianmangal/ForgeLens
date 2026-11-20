@@ -150,3 +150,13 @@ test("symbol provider results inside dependency or generated folders are dropped
   assert.equal(response.source, "workspace_provider");
   assert.deepEqual(response.results.map(result => [result.path, result.startLine, result.endLine]), [["src/cli.py", 5, 10]]);
 });
+
+test("a capped search reports the first omitted location and count without charging its excerpt", async t => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "demo.txt"), "target first\ntarget second\ntarget last\n");
+  const reply = await searchText("target", new RunContextBudget("cap", 6000), undefined, 1);
+  assert.equal(reply.results.length, 1);
+  const [included, excluded] = reply.contextRows;
+  assert.deepEqual([excluded.exclusion, excluded.omittedMatches, excluded.path, excluded.startLine,
+    excluded.costTokens, excluded.cumulativeTokens], ["result_limit", 2, "demo.txt", 2, 0, included.costTokens]);
+});

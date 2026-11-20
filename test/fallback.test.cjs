@@ -317,3 +317,23 @@ test("the backup run charges the selection to its own run and sends its prepared
   assert.match(turns[0][1], /"text":"prepared-1"/);
   assert.match(turns[1][1], /"text":"prepared-2"/);
 });
+
+test("saved verification resumes the same session once and never replays applied work on the backup", async () => {
+  let turn = 0;
+  const { fallback, observed, harness } = fixture({
+    "primary/model": () => ++turn === 1 ? events(created(), done()) :
+      events(created("verify"), done("error", { message: "503 service unavailable" }))
+  });
+  const ready = await fallback.start("primary/model", "edit");
+  assert.throws(() => harness.verifySaved("stale", ["a.py"], []), /no longer/);
+  const pending = harness.verifySaved(ready.runId, ["a.py"], ["b.py:1-2"]);
+  assert.equal(harness.isVerifying(ready.runId), true);
+  assert.equal(harness.registerProposed(ready.runId, "late"), false);
+  assert.throws(() => harness.verifySaved(ready.runId, ["a.py"], []), /no longer/);
+  const finished = await pending;
+  assert.equal(finished.status, "failed");
+  assert.deepEqual(observed.models, ["primary/model"]);
+  assert.equal(observed.turns.length, 2);
+  assert.match(observed.turns[1][1], /"applied":\["a.py"\],"rejected":\["b.py:1-2"\]/);
+  assert.match(observed.problems[0], /Verification stopped after saving/);
+});

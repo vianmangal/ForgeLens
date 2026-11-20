@@ -23,7 +23,8 @@
     "build": "npm run compile && esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=build/extension.cjs",
     "test": "npm run compile && node --test test/*.test.cjs",
     "vscode:prepublish": "npm run build",
-    "test:host": "npm run build && node test/extension-host/run.cjs"
+    "test:host": "npm run build && node test/extension-host/run.cjs",
+    "lint": "eslint src media scripts integration test eslint.config.mjs"
   },
   "contributes": {
     "commands": [
@@ -271,8 +272,11 @@
     "@types/express": "^5.0.6",
     "@types/node": "^20.19.43",
     "@types/vscode": "1.98.0",
+    "@typescript-eslint/parser": "8.73.0",
     "@vscode/test-electron": "3.1.0",
     "esbuild": "0.28.2",
+    "eslint": "10.15.0",
+    "globals": "16.5.0",
     "typescript": "5.9.3"
   }
 }

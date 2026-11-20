@@ -83,6 +83,7 @@ async function setup(t, files = { "a.py": "one\ntwo\nthree\nfour\nfive\n" }, ini
     review: { store },
     currentRunId: () => state.runId,
     isRunActive: id => id === state.runId && state.active,
+    isVerifying: id => id === state.runId && state.verifying,
     registerProposed: () => true,
     onContextRows: () => {}
   };
@@ -285,4 +286,18 @@ test("an empty profile list disables checks and says how to enable them", async 
   const { registered, call } = await setup(t, undefined, { checkProfiles: [] });
   assert.match(registered.run_check.config.description, /No check profiles are configured; set forgelens\.checkProfiles/);
   assert.match((await call("run_check", { checkId: "pytest" })).message, /No check profiles are configured/);
+});
+
+test("verification can run the saved-workspace check after review closes, with exact profile arguments", async t => {
+  const { store, state, call } = await setup(t);
+  const args = ["-e", "process.stdout.write('saved')"];
+  settings.set("pythonPath", process.execPath);
+  settings.set("checkProfiles", [{ id: "smoke", args }]);
+  store.markApplied(state.runId, []);
+  assert.equal((await call("run_check", { checkId: "smoke" })).status, "no_active_run");
+  state.verifying = true;
+  assert.equal((await call("read_range", { path: "a.py", startLine: 1, endLine: 1 })).status, "no_active_run");
+  assert.equal((await call("run_check", { checkId: "smoke", args: ["other"] })).isError, true);
+  const result = await call("run_check", { checkId: "smoke", args });
+  assert.deepEqual([result.phase, result.exitCode, result.stdout], ["after_save", 0, "saved"]);
 });

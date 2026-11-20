@@ -41,6 +41,47 @@ function updateCards(rows) {
     card.querySelectorAll("button").forEach(button => { button.disabled = row.status !== "pending"; });
   }
 }
+const reviewFiles = new Map();
+const reviewHunks = new Map();
+function updateReview(hunks) {
+  const counts = new Map();
+  const ids = new Set();
+  for (const hunk of hunks) {
+    ids.add(hunk.id);
+    counts.set(hunk.path, (counts.get(hunk.path) || 0) + 1);
+    let group = reviewFiles.get(hunk.path);
+    if (!group) {
+      group = document.createElement("section");
+      group.append(document.createElement("h3"));
+      reviewFiles.set(hunk.path, group);
+      el("review-files").append(group);
+    }
+    let row = reviewHunks.get(hunk.id);
+    if (!row) {
+      row = document.createElement("article");
+      for (const action of ["open", "accept", "reject"]) {
+        const button = document.createElement("button");
+        button.textContent = action === "open" ? "Open diff · line " + hunk.startLine : action === "accept" ? "Accept" : "Reject";
+        button.onclick = () => vscode.postMessage({ type: "review", runId, action, hunkId: hunk.id });
+        row.append(button);
+      }
+      row.append(document.createElement("span"));
+      reviewHunks.set(hunk.id, row);
+      group.append(row);
+    }
+    row.lastElementChild.textContent = " " + hunk.status.replace(/_/g, " ");
+    const [open, accept, reject] = row.querySelectorAll("button");
+    open.disabled = hunk.status === "invalidated";
+    accept.disabled = reject.disabled = hunk.status !== "approval_requested";
+  }
+  for (const [id, row] of reviewHunks) {
+    if (!ids.has(id)) { row.remove(); reviewHunks.delete(id); }
+  }
+  for (const [path, group] of reviewFiles) {
+    if (counts.has(path)) group.firstElementChild.textContent = path + " (" + counts.get(path) + ")";
+    else { group.remove(); reviewFiles.delete(path); }
+  }
+}
 // Shows retrieval cost and lets the developer open the cited workspace range.
 function updateContextRows(rows) {
   const section = el("context-section");
@@ -73,6 +114,7 @@ function updateContextRows(rows) {
     entry.detail.textContent = row.tool + " · " + row.query + " · " + row.signal;
     const state = row.sentToModel
       ? row.exclusion === "truncated" ? "sent (truncated)" : "sent"
+      : row.exclusion === "result_limit" ? row.omittedMatches + " omitted at result limit"
       : row.exclusion === "duplicate" ? "already included" : "excluded: " + (row.exclusion || "not sent");
     entry.cost.textContent = row.costTokens + " estimated source tokens · " + row.cumulativeTokens +
       (typeof row.limitTokens === "number" ? " of " + row.limitTokens : "") + " used this run · " + state;
@@ -104,6 +146,7 @@ window.addEventListener("message", ({ data }) => {
   el("reply-section").hidden = !data.text;
   el("reply").textContent = data.text;
   updateCards(data.rows);
+  updateReview(data.reviewHunks || []);
   updateContextRows(data.contextRows || []);
 });
 vscode.postMessage({ type: "ready" });

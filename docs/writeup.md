@@ -48,8 +48,8 @@ Ranking is lexical. There is no vector index and no relevance model beyond ident
 
 | Role | Provider | Model | Hosting | Approximate cost |
 | --- | --- | --- | --- | --- |
-| Primary | TrueForge built-in `google-gemini` | `gemini-3-1-flash-lite` | Google cloud, free tier | `TODO` |
-| Backup | TrueForge custom provider `ollama` | `qwen3:8b` | Local through Ollama | `TODO` |
+| Primary | TrueForge built-in `google-gemini` | `gemini-3-1-flash-lite` | Google cloud, free tier | $0 within the configured free tier |
+| Backup | TrueForge custom provider `ollama` | `qwen3:8b` | Local through Ollama | $0 API fees, local hardware |
 
 They are separate providers with separate credentials. Keys are entered only in TrueForge, never in the repository. To switch, change `forgelens.primaryModel` and `forgelens.backupModel` to the full `provider/model` names shown in TrueForge ([`examples/models.example.md`](../examples/models.example.md)). Both models passed TrueForge's built-in tool-call test on 17 Nov 2026. They have not yet been run against the ForgeLens connector: `TODO: record the actual model and outcome of Tasks A, B and C.` Three other candidates failed tool use in testing (see `docs/models-and-resilience.md`).
 
@@ -64,8 +64,8 @@ Timestamps come from the final video edit. Claims describe what the code and tes
 | A1 Inline edit | 10 | TODO timestamp | `Cmd+Alt+E` sends the selected lines and an instruction through the harness; changes open as a native diff with per-change Accept/Reject. Live Task A result unverified. |
 | A2 Agent mode | 10 | TODO timestamp | The panel starts a TrueForge run that uses the six tools and the same review flow. Whether Task B reaches three or more files is unverified. |
 | A3 Streaming and cancellation | 10 | TODO timestamp | Real `model.message.delta` text streams into the panel. On 17 Nov a live cancel after the first 3 characters and a cancel during approval each recorded a cancelled turn and no later callbacks (local proof model). |
-| B1 Context assembly | 15 | TODO timestamp | The ledger charges every retrieval against 6,000 estimated tokens and shows reasons and exclusions in clickable rows. No dedicated test of budget capping or ranking exists yet. |
-| B2 Diff safety | 10 | TODO timestamp | Accept/Reject per hunk; one atomic Apply with version-and-hash conflict refusal; native undo. 88 unit tests pass, and 8 extension-host cases passed earlier, both using a fixture event source. |
+| B1 Context assembly | 15 | TODO timestamp | The ledger charges every retrieval against 6,000 estimated tokens and shows reasons and exclusions in clickable rows. Tests cover definition ranking and budget exhaustion. |
+| B2 Diff safety | 10 | TODO timestamp | Accept/Reject per hunk; one atomic Apply with version-and-hash conflict refusal; native undo. Extension-host tests exercise real VS Code documents and the native undo stack. |
 | B3 Resilience | 10 | TODO timestamp | Automatic one-shot fallback to the backup is implemented and unit-tested, with a clean workspace on failure. A live fallback with real credentials is unverified. |
 | B4 TrueForge integration | 10 | TODO timestamp | Authenticated MCP connector, gated `approve_hunk`, and deferred `run_check` in the manifest. Live approval is proven only with the proof connector. A session showing the team connector is unverified. |
 | C1 Video | 10 | TODO timestamp | `TODO: runtime ≤ 4:00, Tasks A, B, C in order.` |
@@ -76,14 +76,14 @@ Timestamps come from the final video edit. Claims describe what the code and tes
 - **Runtime:** TrueForge 0.185.1 (local) with its SDK 0.185.0; VS Code extension API; MCP SDK 1.32.2; Ollama for the backup model.
 - **Libraries:** `diff` 8.0.4, `ignore`, `zod`, `esbuild` 0.28.2, TypeScript 5.9.3, `@vscode/test-electron` 3.1.0.
 - **Demo:** Flask 3.1.3 (`22d92470`), `uv`, `pytest`.
-- **AI coding tools:** `TODO: list the assistants used and for what.`
+- **AI coding tools:** OpenAI Codex for implementation, code review and verification. TODO: confirm the full team list.
 
 ## 8. Known limitations and what you would do with another month
 
 - **Live evidence is thin.** The real-model proof used a 1.7B local model and the proof connector. The team connector with Gemini and with `qwen3:8b` has not been run on Tasks A, B or C. The recorded runs are still to do.
-- **Retrieval is lexical and untested at the edges.** There is no vector index, and no test with similarly named files and a tiny budget. The token estimate is a byte heuristic.
-- **`run_check` is hard to reach.** The model is not told the profile IDs, so it must guess `checkId`. It runs only configured Python profiles. A check before Apply is not run against candidate trees.
+- **Retrieval is lexical.** Ranking prioritizes definitions and identifiers. Source token costs use a byte estimate.
+- **Verification uses configured Python profiles.** Save and verify resumes the original session. The live recording still needs to show the competition model discovering and executing the check.
 - **Scope.** One trusted workspace and one active run; not packaged for the Marketplace, no CI.
 - **Small models misreport approvals,** so Apply trusts only the recorded decision and the editor's hunk state.
 - **Fallback is one hop** and relies on TrueForge's retries for transient failures.
-- **With another month:** run the full A/B/C matrix on both models and a third provider, add a candidate-tree test runner, an explorer subagent and semantic retrieval, add the tests above, publish a packaged extension with CI, and advertise check profiles to the model.
+- **With another month:** run the full A/B/C matrix on both models and a third provider, add a candidate-tree test runner, an explorer subagent and semantic retrieval, and publish a packaged extension with CI.

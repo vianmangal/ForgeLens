@@ -33,7 +33,8 @@ export interface ContextRow {
   costTokens: number;
   cumulativeTokens: number;
   limitTokens: number;
-  exclusion?: "truncated" | "duplicate" | "over_budget";
+  exclusion?: "truncated" | "duplicate" | "over_budget" | "result_limit";
+  omittedMatches?: number;
 }
 
 export interface RunState {

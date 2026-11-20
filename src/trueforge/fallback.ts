@@ -86,6 +86,10 @@ export class Fallback {
 
   private failed(failure: Failure) {
     if (failure.kind === "cancelled") return;
+    if (failure.afterApply) {
+      this.options.problem("Verification stopped after saving. " + failure.message);
+      return;
+    }
     if (failure.kind === "input") {
       this.options.problem(failure.message);
       return;

@@ -142,7 +142,7 @@ Put these in each Flask checkout's `.vscode/settings.json` (or in your user sett
 | `forgelens.primaryModel` | empty | Required. Complete `provider/model` name configured in TrueForge. |
 | `forgelens.backupModel` | empty | Used once when the primary fails with an auth, server or network error. Blank turns fallback off. |
 | `forgelens.pythonPath` | `python` | Executable used by `run_check`. Use the checkout's venv Python. |
-| `forgelens.checkProfiles` | `[]` | Allowlist of `{id, args}` profiles that `run_check` may run with `pythonPath`. The example above is a suggested profile, not shipped. |
+| `forgelens.checkProfiles` | `pytest` (`-m pytest -q`) | Allowlist of Python check profiles. Set an empty list to disable checks. |
 | `forgelens.mcpPort` | 8791 | Loopback port of the ForgeLens MCP server. Read when the extension starts. |
 | `forgelens.contextBudget` | 6000 | Estimated source tokens shared by retrieval tools per run. |
 | `forgelens.trueforgePort` | 8790 | Port of local TrueForge on `127.0.0.1`. |
@@ -203,6 +203,8 @@ Accept and Reject appear as CodeLens above each change and as buttons in **Forge
 
 The team manifest explicitly exposes six MCP tools. Search, symbol lookup, range reads, edit proposals and hunk approvals are preloaded. The model can discover `run_check` when needed. Only `approve_hunk` requires a human decision. The proof uses its own connector and three bounded tools, so it can run before Person 3 ships the team connector. [TrueForge SDK guide](https://trueforge.dev/api/use-agent) · [Deferred tool loading](https://trueforge.dev/key-features/deferred-tool-loading)
 
+The agent panel groups proposed hunks by file. Open a diff or accept and reject individual hunks there. After Apply, choose **Save and verify** to send the applied files and rejected ranges back to the original TrueForge session. The agent can discover and run a configured check. Inspect its command, exit code and output. The Task B acceptance script additionally checks the CLI help and masked JSON.
+
 ## Task C: model failure
 
 1. Reopen the Development Host on `~/forgelens-demo/flask-c`. In TrueForge, make the primary provider fail without showing a real key: save a deliberately invalid key in the primary provider, or add a separate provider with an invalid key and point `forgelens.primaryModel` at it.
@@ -217,18 +219,19 @@ Failure classification (`src/trueforge/harness.ts`): HTTP 401/403 and messages l
 ## Run the tests
 
 ```sh
+npm run lint          # check TypeScript and JavaScript
 npm run compile       # typecheck
 npm test              # compile, then node --test test/*.test.cjs
 npm run test:host     # build, then an isolated VS Code extension-host suite (macOS)
 ```
 
-`npm test` reported **88 passed, 0 failed** on this branch. `npm run test:host` downloads a stable VS Code on first run, or uses `VSCODE_EXECUTABLE_PATH`. It was not rerun for this documentation change; [`docs/editor-review.md`](docs/editor-review.md) records 8 of 8 passing earlier. The repository has no lint script.
+The host suite launches VS Code with a disposable workspace and profile. Set `VSCODE_EXECUTABLE_PATH` to use an installed VS Code executable.
 
 ## Harness proof
 
 This proves the TrueForge integration with an isolated three-tool connector and a 1.4 GB local proof model before the team's real tools were attached. It uses ports 8790 (TrueForge), 8792 (proof connector) and 11436 (Ollama). It is independent of the competition models.
 
-`npm test` runs 120 unit tests. They need no TrueForge server, model or VS Code window:
+The unit tests need no TrueForge server, model or VS Code window:
 
 - **Harness** (`test/harness.test.cjs`):
   - streamed deltas, and approval correlation, including approvals reached through deferred `call_tool` discovery
