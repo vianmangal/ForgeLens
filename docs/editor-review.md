@@ -6,9 +6,10 @@
 
 - **ForgeLens: Edit Selection** (`Ctrl+Alt+E`, `Cmd+Alt+E` on macOS) sends the selected lines and an instruction through `startRun`. A progress notification shows the streamed text and has a Cancel button.
 - **Diff view.** When the first change arrives, a diff opens beside the file: the original snapshot on the left, the proposal on the right. The real file is not touched.
-- **Accept and Reject on each change**, available in three places:
+- **Accept and Reject on each change**, available in four places:
   - CodeLens above the change in the real file.
   - CodeLens in the diff, if `diffEditor.codeLens` is on.
+  - File groups in the agent panel, with a count, status, diff and decisions for each hunk.
   - Inline buttons in **ForgeLens Review** in the Explorer.
 - **How a decision reaches TrueForge.** For harness runs, a click calls `approve` or `reject`. The change shows "sending decision" until `onDecision` confirms it. Before TrueForge asks for approval of a change, a click explains that the request hasn't arrived yet.
 - **Run buttons in ForgeLens Review.** An active run shows Accept All, Reject All and Cancel Review. Apply Accepted Changes to Files appears only when the run has finished, at least one change is accepted, and no file in the run has changed since the proposal.
@@ -57,8 +58,9 @@ The extension's exported API now includes `review`.
 
 Run `npm run test:host` on macOS. It builds the extension and uses `@vscode/test-electron` to launch an isolated VS Code test host with a temporary workspace, profile and extensions directory. The suite runs unattended, with no TrueForge or Ollama server and no manual clicks. Electron still requires a macOS desktop session. The runner deletes the temporary workspace and profile when the host exits; the downloaded VS Code cache stays under ignored `.local/vscode-test/`.
 
-The eight cases use the activated extension's exported `review` API, the dev proposal command, the review commands and real VS Code documents. They cover:
+The host cases use the activated extension's exported `review` API, the dev proposal command, the review commands and real VS Code documents. They cover:
 
+- Explicit saving of the applied file and refusal after a later manual edit.
 - Two hunks in one file, accept one and reject one, then Apply and native `undo`.
 - Three files in one Apply, restored together by one native `undo`.
 - A manual edit blocking every write and naming the conflicted file.
@@ -71,11 +73,7 @@ Only the TrueForge event source is a local fixture passed through `review.connec
 
 The first run downloads stable VS Code and requires network access. Set `VSCODE_VERSION` to select another release, or `VSCODE_EXECUTABLE_PATH` to an existing VS Code executable to run offline. Download or launch failures exit nonzero; they must not be reported as passing host tests. See the [VS Code extension testing guide](https://code.visualstudio.com/api/working-with-extensions/testing-extension).
 
-Last verified on macOS on 20 November 2026 with downloaded VS Code 1.147.0: **8 passed, 0 failed**. The unit suite then passed **120 tests**. The host cases verify the editor client. The workspace tools reach the same review store, and their unit tests are in `test/mcp-tools.test.cjs`.
-
-## Agent-panel layout proposal
-
-The [proposal on PR #1](https://github.com/vianmangal/ForgeLens/pull/1#issuecomment-6977657430) keeps the native, keyboard-accessible ForgeLens Review Explorer as the grouped multi-file list. Existing panel approval rows continue to submit through `approve`/`reject` and synchronize with review via `onDecision`. Vian can optionally add an **Open review** link by adding `enableCommandUris: ["forgelens.review.focus"],` to the webview options and `<a href="command:forgelens.review.focus">Open review</a>` to its HTML. Layout agreement and the optional panel change are pending Vian; no panel or media files were changed here.
+The agent panel and Explorer use the same review commands. On a production run, **Save and verify** checks the applied buffers, saves them, and asks the original TrueForge session to verify the saved files. Verification failures leave the saved changes in place.
 
 ## Person 3 tool integration status, 20 November 2026
 

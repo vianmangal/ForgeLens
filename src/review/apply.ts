@@ -127,6 +127,24 @@ export class Applier {
     });
   }
 
+  async saveApplied(runId: RunId): Promise<void> {
+    await this.store.serialize(async () => {
+      const last = this.last;
+      if (last?.runId !== runId || this.store.getRun(runId)?.reverted) {
+        throw new Error("This Apply has been replaced or undone.");
+      }
+      const docs = await Promise.all(last.files.map(file => vscode.workspace.openTextDocument(file.uri)));
+      const matches = (i: number) => hashText(docs[i].getText()) === last.files[i].afterHash;
+      if (!docs.every((_, i) => matches(i))) throw new Error("The applied files have changed. Check them before saving.");
+      for (const [i, doc] of docs.entries()) {
+        if (!matches(i) || (doc.isDirty && !await doc.save())) throw new Error("Could not save " + last.files[i].uri.fsPath);
+      }
+      if (!docs.every((doc, i) => !doc.isDirty && matches(i))) {
+        throw new Error("The saved files differ from the applied changes. Check them before verification.");
+      }
+    });
+  }
+
   undoLastApply(): Promise<string> {
     return this.store.serialize(async () => {
       const last = this.last;

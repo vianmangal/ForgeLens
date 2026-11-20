@@ -13,6 +13,7 @@ export interface HarnessLink {
   reject(hunkId: string, reason?: string): boolean;
   cancel(): Promise<void>;
   onState: vscode.Event<RunState>;
+  verifySaved?(runId: RunId, applied: string[], rejected: string[]): Promise<RunState>;
   onDelta: vscode.Event<{ runId: string; text: string }>;
   onApproval: vscode.Event<{ runId: string; hunkId: string; toolCallId: string }>;
   onDecision: vscode.Event<{ runId: string; hunkId: string; allowed: boolean }>;
@@ -117,18 +118,24 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     return pick?.runId;
   };
 
-  const showApplyOutcome = async (outcome: ApplyOutcome) => {
+  const showApplyOutcome = async (runId: RunId, outcome: ApplyOutcome) => {
     if (!outcome.applied) {
       const show = outcome.conflicts.length > 0 ? vscode.window.showErrorMessage : vscode.window.showInformationMessage;
       show(`ForgeLens: ${outcome.message}`);
       return;
     }
-    const choice = await vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`, "Save files", "Undo");
-    if (choice === "Save files") {
-      for (const doc of vscode.workspace.textDocuments) {
-        if (outcome.files.includes(vscode.workspace.asRelativePath(doc.uri, false)) && doc.isDirty) {
-          await doc.save();
+    const verify = harnessRuns.has(runId) && link?.verifySaved;
+    const choice = await vscode.window.showInformationMessage(`ForgeLens: ${outcome.message}`,
+      "Save files", ...(verify ? ["Save and verify"] : []), "Undo");
+    if (choice === "Save files" || choice === "Save and verify") {
+      try {
+        await applier.saveApplied(runId);
+        if (choice === "Save and verify" && verify) {
+          const rejected = store.hunksOfRun(runId).filter(h => h.status === "rejected");
+          await verify(runId, outcome.files, rejected.map(h => h.path + ":" + h.startLine + "-" + h.endLine));
         }
+      } catch (error) {
+        void vscode.window.showErrorMessage(String(error));
       }
     } else if (choice === "Undo") {
       vscode.window.showInformationMessage(`ForgeLens: ${await applier.undoLastApply()}`);
@@ -155,7 +162,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
       "Not now"
     );
     if (choice === "Apply") {
-      await showApplyOutcome(await applier.applyAccepted(runId));
+      await showApplyOutcome(runId, await applier.applyAccepted(runId));
     }
   };
 
@@ -428,7 +435,7 @@ export function activateReview(context: vscode.ExtensionContext): ReviewApi {
     vscode.commands.registerCommand("forgelens.applyAccepted", async (arg: unknown) => {
       const runId = await pickRun(arg);
       if (runId) {
-        await showApplyOutcome(await applier.applyAccepted(runId));
+        await showApplyOutcome(runId, await applier.applyAccepted(runId));
       }
     }),
     vscode.commands.registerCommand("forgelens.cancelRun", async (arg: unknown) => {

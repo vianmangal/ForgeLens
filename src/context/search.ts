@@ -600,8 +600,15 @@ export async function searchText(
   const contextRows: ContextRow[] = [];
   let budgetExhausted = false;
 
-  for (const result of candidates) {
+  for (const [index, result] of candidates.entries()) {
     if (results.length >= limit) {
+      // Keep one clickable example and the count without returning discarded excerpts.
+      contextRows.push({
+        runId: budget.runId, tool: options.tool ?? "search_text", query: cleanQuery, path: result.path,
+        startLine: result.startLine, endLine: result.endLine, signal: options.signal ?? result.signal,
+        sentToModel: false, costTokens: 0, cumulativeTokens: budget.cumulativeTokens, limitTokens: budget.limitTokens,
+        exclusion: "result_limit", omittedMatches: candidates.length - index
+      });
       truncated = true;
       break;
     }

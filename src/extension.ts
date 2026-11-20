@@ -142,6 +142,12 @@ export async function activate(context: vscode.ExtensionContext) {
     },
     cancel,
     decide: (id, allowed) => allowed ? approve(id) : reject(id),
+    reviewHunks: runId => editorReview.store.hunksOfRun(runId).map(hunk => ({
+      id: hunk.id, path: hunk.path, startLine: hunk.startLine, endLine: hunk.endLine,
+      status: editorReview.store.isQueued(hunk.id) ? "sending" : hunk.status
+    })),
+    reviewAction: (id, action) => vscode.commands.executeCommand(
+      { open: "forgelens.openHunkDiff", accept: "forgelens.acceptHunk", reject: "forgelens.rejectHunk" }[action], id),
     // Opens only a validated workspace-relative source range from a retrieval row.
     openContext: async (row: ContextRow) => {
       const folders = vscode.workspace.workspaceFolders;
@@ -169,6 +175,7 @@ export async function activate(context: vscode.ExtensionContext) {
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
     }
   });
+  context.subscriptions.push(editorReview.store.onDidChange(() => panel.refresh()));
   // Starts the local editor-tools endpoint after the review and panel APIs are ready.
   const mcpPort = config().get<number>("mcpPort", 8791);
   try {
@@ -178,6 +185,7 @@ export async function activate(context: vscode.ExtensionContext) {
         review: editorReview,
         currentRunId,
         isRunActive: runId => active?.state?.runId === runId && active.isActive(runId),
+        isVerifying: runId => active?.isVerifying(runId) ?? false,
         registerProposed,
         onContextRows: (runId, rows) => panel.context(runId, rows)
       }));
@@ -189,6 +197,10 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   context.subscriptions.push(editorReview.connectHarness({
     startRun: (instruction, selection) => startRun(model(), instruction, selection),
+    verifySaved: (runId, files, rejected) => {
+      if (!active) throw new Error("No TrueForge session is available.");
+      return active.verifySaved(runId, files, rejected);
+    },
     approve, reject, cancel, onState: changes.event, onDelta: deltas.event, onApproval: approvals.event,
     onDecision: decisions.event, onInvalidate: invalidations.event, onRunFailed
   }));

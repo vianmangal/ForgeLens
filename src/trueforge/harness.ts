@@ -17,6 +17,7 @@ export interface Failure {
   kind: "auth" | "network" | "server" | "cancelled" | "tool" | "input";
   message: string;
   checkMayHaveRun?: boolean;
+  afterApply?: boolean;
 }
 
 export interface HarnessHooks {
@@ -55,6 +56,7 @@ class Run {
   cancellation?: Promise<void>;
   drainError?: Error;
   checkMayHaveRun = false;
+  afterApply = false;
   mcpSessionId?: string;
   terminalTurn = false;
   openedTurn = false;
@@ -137,8 +139,28 @@ export class Harness {
     return () => { this.failures.delete(callback); };
   }
 
+  isVerifying(runId: string): boolean {
+    return this.isActive(runId) && this.current!.afterApply;
+  }
+
+  verifySaved(runId: string, applied: string[], rejected: string[]): Promise<RunState> {
+    const run = this.current;
+    if (!run || run.state.runId !== runId || run.active || run.state.status !== "ready_to_apply" ||
+      run.afterApply || !applied.length) throw new Error("This review is no longer available for verification.");
+    run.afterApply = true;
+    run.active = true;
+    run.controller = new AbortController();
+    run.state.status = "streaming";
+    this.publish(run);
+    const message = "The developer applied and saved these changes. Use run_check to verify the saved workspace " +
+      "and report the command, exit code and result. Do not propose more edits. " +
+      JSON.stringify({ applied, rejected });
+    run.finished = this.execute(run, message);
+    return run.finished;
+  }
+
   registerProposed(runId: string, hunkId: string): boolean {
-    if (!hunkId || !this.isActive(runId)) return false;
+    if (!hunkId || !this.isActive(runId) || this.isVerifying(runId)) return false;
     this.current!.proposed.add(hunkId);
     return true;
   }
@@ -239,19 +261,22 @@ export class Harness {
     this.hooks.onInvalidate?.(run.state.runId);
     this.publish(run);
     const failure: Failure = { runId: run.state.runId, model: run.state.model, kind, message };
+    if (run.afterApply) failure.afterApply = true;
     if (run.checkMayHaveRun) failure.checkMayHaveRun = true;
     for (const listener of this.failures) listener(failure);
   }
 
   private async execute(run: Run, content: string): Promise<RunState> {
     try {
-      run.sessionOpening = true;
-      const opening = this.sessions.create({
-        agent: { spec: { ...this.spec, model: { ...this.spec.model, name: run.state.model } } }
-      }, run.options);
-      run.opening = opening;
-      run.state.sessionId = (await opening).data.id;
-      run.sessionOpening = false;
+      if (!run.afterApply) {
+        run.sessionOpening = true;
+        const opening = this.sessions.create({
+          agent: { spec: { ...this.spec, model: { ...this.spec.model, name: run.state.model } } }
+        }, run.options);
+        run.opening = opening;
+        run.state.sessionId = (await opening).data.id;
+        run.sessionOpening = false;
+      }
       let sentReminder = false;
       while (run.active) {
         const previousTurnId = run.state.turnId;
@@ -274,7 +299,7 @@ export class Harness {
         const missing = [...run.proposed].filter(id => !run.requested.has(id));
         if (!missing.length) {
           run.active = false;
-          run.state.status = "ready_to_apply";
+          run.state.status = run.afterApply ? "applied" : "ready_to_apply";
           this.publish(run);
           break;
         }

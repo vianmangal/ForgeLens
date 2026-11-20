@@ -470,3 +470,15 @@ test("the selection returned by prepareSelection is what the first turn sends", 
   assert.match(sent, /"text":"one\\n","truncated":true/);
   assert.doesNotMatch(sent, /three/);
 });
+
+test("a saved review creates one verification turn in the original session and streams its result", async () => {
+  const { harness, observed } = fixture();
+  const ready = await harness.startRun("primary/model", "change");
+  const checked = await harness.verifySaved(ready.runId, ["src/a"], []);
+  assert.equal(checked.status, "applied");
+  assert.equal(harness.isVerifying(ready.runId), false);
+  assert.deepEqual(observed.api.map(call => call[0]), ["create", "turn", "turn"]);
+  assert.equal(observed.api[1][1], observed.api[2][1]);
+  assert.deepEqual(observed.text, ["one ", "line", "one ", "line"]);
+  assert.throws(() => harness.verifySaved(ready.runId, ["src/a"], []), /no longer/);
+});

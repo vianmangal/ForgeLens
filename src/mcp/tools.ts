@@ -21,6 +21,7 @@ export interface ForgeLensToolContext {
   review: ReviewApi;
   currentRunId: CurrentRunId;
   isRunActive: (runId: string) => boolean;
+  isVerifying?: (runId: string) => boolean;
   registerProposed: (runId: string, hunkId: string) => boolean;
   onContextRows?: (runId: string, rows: ContextRow[]) => void;
 }
@@ -500,10 +501,13 @@ export function registerRunCheckTool(
     "run_check",
     {
       description: "Run one check profile configured by the developer, such as a test suite, in the workspace root with its configured Python executable and arguments. Returns the command, working directory, exit code and bounded stdout/stderr. Run it only after the developer has applied and saved the accepted edits; an earlier run is only a baseline. " + available,
-      inputSchema: { checkId: z.string().min(1).max(128).describe("ID of a configured check profile. " + available) }
+      inputSchema: { checkId: z.string().min(1).max(128).describe("ID of a configured check profile. " + available),
+        args: z.array(z.string()).optional().describe("Optional exact argument list from the selected profile.") }
     },
-    async ({ checkId }, extra) => {
-      const runId = currentRun(context);
+    async ({ checkId, args }, extra) => {
+      const owner = context.currentRunId();
+      const afterSave = !!owner && context.isRunActive(owner) && context.isVerifying?.(owner);
+      const runId = afterSave ? owner : currentRun(context);
       if (!runId) return result({ status: "no_active_run", message: "There is no active ForgeLens run." }, true);
       if (extra.signal.aborted) return result({ status: "cancelled", message: "The run was cancelled before the check started." });
 
@@ -518,6 +522,9 @@ export function registerRunCheckTool(
         return result({ status: "error", message: `Unknown check profile "${checkId}". ${profileList(profiles)}` }, true);
       }
 
+      if (args && (args.length !== profile.args.length || args.some((arg, i) => arg !== profile.args[i]))) {
+        return result({ status: "error", message: "Arguments must exactly match the configured check profile." }, true);
+      }
       const pythonPath = vscode.workspace.getConfiguration("forgelens").get<string>("pythonPath", "python").trim();
       if (!pythonPath) return result({ status: "error", message: "Set forgelens.pythonPath to the selected Python executable." }, true);
 
@@ -633,6 +640,7 @@ export function registerRunCheckTool(
       return result({
         status: timedOut ? "timed_out" : cancelled ? "cancelled" : outcome.error ? "error" : "completed",
         checkId,
+        phase: afterSave ? "after_save" : "baseline",
         command,
         cwd,
         exitCode: outcome.exitCode,

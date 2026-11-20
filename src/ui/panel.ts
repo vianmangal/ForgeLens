@@ -3,11 +3,20 @@ import { randomBytes } from "node:crypto";
 import type { ContextRow, RunState } from "../shared/types";
 import type { ProofHunk } from "../proof/connector";
 
+export interface PanelHunk {
+  id: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  status: string;
+}
 type Row = { hunkId: string; detail?: ProofHunk; status: "pending" | "sending" | "accepted" | "rejected" };
 export interface PanelActions {
   run(instruction: string): Promise<unknown>;
   cancel(): Promise<void>;
   decide(id: string, allow: boolean): boolean;
+  reviewHunks(runId: string): PanelHunk[];
+  reviewAction(id: string, action: "open" | "accept" | "reject"): PromiseLike<unknown>;
   openContext(row: ContextRow): Promise<void>;
 }
 
@@ -36,6 +45,7 @@ export class AgentPanel {
       <form id="form"><label for="task">Repository task</label><textarea id="task" required rows="3" placeholder="Optional context: @file(path/to/file) or @symbol(name)"></textarea>
       <button id="run">Run task</button><button id="cancel" type="button" hidden>Cancel run</button></form>
       <p id="status" role="status"></p><p id="error" role="alert"></p><section id="approvals" aria-label="Hunk approvals"></section>
+      <section id="review-files" aria-label="Proposed changes"></section>
       <section id="context-section"><h2>Retrieved context</h2><div id="context-rows"></div></section>
       <section id="reply-section" hidden><h2>Model reply</h2><pre id="reply"></pre></section></main><script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => { this.panel = undefined; });
@@ -51,6 +61,13 @@ export class AgentPanel {
           if (row?.status === "pending" && this.actions.decide(row.hunkId, message.allow)) {
             row.status = "sending";
             this.refresh();
+          }
+        }
+        if (message.type === "review" && this.state) {
+          const hunk = this.actions.reviewHunks(this.state.runId).find(h => h.id === message.hunkId);
+          const action = message.action;
+          if (hunk && ((action === "open" && hunk.status !== "invalidated") || (hunk.status === "approval_requested" && (action === "accept" || action === "reject")))) {
+            await this.actions.reviewAction(hunk.id, action);
           }
         }
         if (message.type === "openContext") {
@@ -106,8 +123,9 @@ export class AgentPanel {
   problem(message: string) { this.error = message; this.refresh(); }
   dispose() { this.panel?.dispose(); }
 
-  private refresh() {
+  refresh() {
     void this.panel?.webview.postMessage({ type: "view", state: this.state, text: this.transcript,
-      rows: [...this.rows.values()], contextRows: this.contextRows, error: this.error });
+      reviewHunks: this.state ? this.actions.reviewHunks(this.state.runId) : [],
+      rows: [...this.rows.values()].filter(row => row.detail), contextRows: this.contextRows, error: this.error });
   }
 }

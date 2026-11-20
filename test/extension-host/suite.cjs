@@ -100,6 +100,24 @@ const cases = [
     await nativeUndo(document);
     assert.equal(document.getText(), original);
   }],
+  ["explicit save writes the applied file and refuses to save a later edit", async () => {
+    const doc = await file("verify");
+    const run = review.store.createRun("agent", "save");
+    const id = stage(run.runId, doc);
+    review.store.decide(id, "accepted");
+    review.store.markFinished(run.runId);
+    assert.equal((await review.applyAccepted(run.runId)).applied, true);
+    assert.equal(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)).toString(), original);
+    await review.applier.saveApplied(run.runId);
+    assert.equal(doc.isDirty, false);
+    const saved = Buffer.from(await vscode.workspace.fs.readFile(doc.uri)).toString();
+    assert.equal(saved, original.replace("alpha", "ALPHA"));
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(doc.uri, doc.positionAt(0), "manual ");
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    await assert.rejects(review.applier.saveApplied(run.runId), /changed/);
+    assert.equal(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)).toString(), saved);
+  }],
   ["three files: one Apply and one native undo", async () => {
     const documents = [];
     for (const name of ["multi-a", "multi-b", "multi-c"]) documents.push(await file(name));

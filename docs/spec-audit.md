@@ -1,5 +1,7 @@
 # Spec audit: `main` against `docs/spec.md`
 
+This table records the PR #7 audit. For the current implementation of items marked partial or deferred here, see [Follow-up status](#follow-up-status).
+
 Audited on 20 November 2026 against `origin/main` at `b367a05`. Gaps that could be fixed without a live model run are fixed on `fix/spec-gaps`; those rows say **fixed here** and cite the new test. Each test written for a fix was also run against the previous source and failed for the expected reason. Three added tests cover behaviour that already worked and pass on both: `cancelling the run stops a running check promptly…`, `duplicates and over-budget content are recorded…` and `a zero budget sends nothing…`. The `approve_hunk` abort test also passes on both, because it guards against a hang the old code could not have.
 
 Status key: **done** means implemented with automated evidence. **partial** means implemented but missing a piece. **missing** means not implemented. **live** means the code path exists but the spec's claim needs a real model, TrueForge session or recording to verify.
@@ -32,7 +34,7 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 | `propose_edit`: validate against snapshot; independent hunks with opaque IDs; reject stale, ambiguous, overlapping and out-of-workspace targets with a recoverable explanation | done (stale check fixed here) | `src/mcp/tools.ts:399`, `:433`; `src/review/hunks.ts:212`, `:238`; `src/review/store.ts:248`; tests `propose_edit rejects a snapshot that no longer matches the live buffer…`, `anchor proposals must be unique…`, `overlapping proposals are rejected…` | A snapshot older than the live buffer used to be accepted and only failed at Apply |
 | Never accept a model-supplied ID as proof of ownership | done (snapshots fixed here) | Hunks: `src/mcp/tools.ts:461` ownership check. Snapshots: `src/mcp/tools.ts:420`. Test `propose_edit accepts only snapshots that read_range issued to the current run` | Any snapshot ID known to the store was previously accepted |
 | `approve_hunk` returns the developer's real decision | done (fixed here) | `src/mcp/tools.ts:74` `waitForDecision` and the queued direction from `src/review/store.ts` `queuedDecision`; tests `approve_hunk waits for the decision…`, `approve_hunk answers at once when the developer's acceptance is queued…`, `…rejection as final…`, `…stops waiting when the MCP request is aborted` | TrueForge runs the allowed call while the harness is still posting the approval, so the tool often answered `pending` and invited a retry |
-| `run_check`: configured executable and arguments; shows command, working directory, bounded output, exit code and cancellation | done (command, cwd and default profile fixed here) / partial | `src/mcp/tools.ts:96` `configuredCheckProfiles`, `:500`, `:622`; `package.json` default `pytest` profile (`-m pytest -q`); tests `run_check reports the executed command and working directory`, `cancelling the run stops a running check promptly…`, `a default pytest profile ships…`, `run_check lists only valid, unique configured profile IDs…`, `an empty profile list disables checks…` | The tool description and the unknown-ID error list the configured profile IDs. Profiles still carry fixed arguments, with no per-call argument input; that is stricter than the spec's "validated arguments". Post-apply use is a known limitation (below) |
+| `run_check`: configured executable and arguments; shows command, working directory, bounded output, exit code and cancellation | done (command, cwd and default profile fixed here) / partial | `src/mcp/tools.ts:96` `configuredCheckProfiles`, `:500`, `:622`; `package.json` default `pytest` profile (`-m pytest -q`); tests `run_check reports the executed command and working directory`, `cancelling the run stops a running check promptly…`, `a default pytest profile ships…`, `run_check lists only valid, unique configured profile IDs…`, `an empty profile list disables checks…` | The tool description and the unknown-ID error list the configured profile IDs. Optional call arguments must match the configured vector. See follow-up status for after-save checks. |
 | Every result, proposal and approval bound to the originating run; path traversal rejected | done | `src/mcp/server.ts:76`; `src/trueforge/harness.ts:366`; `src/mcp/tools.ts:131`; test `only the active run's announced ForgeLens MCP session owns its tools` | — |
 | Stream handling: real deltas, approval correlation, resume from the last event, one `user.tool_approval` per call, reconnect, replay-safe, `turn.done` state | done | `src/trueforge/harness.ts:341`, `:429`; tests `correlates split tool arguments…`, `a dropped live stream replays…`, `losing the stream before its first frame…`, `installed SDK serializes a gated turn…` | — |
 
@@ -46,7 +48,7 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 | Inline selection charged to the budget before tools run | done (fixed here) | `src/context/mentions.ts:218`; `src/trueforge/harness.ts:171`; `src/extension.ts:98`; tests `an inline selection is charged…`, `the selection returned by prepareSelection…`, `the backup run charges the selection to its own run…` | Selection text used to be sent without a row or a charge |
 | Rank exact definitions and matching identifiers above plain text; works on arbitrary repositories | done (fixed here) | `src/context/search.ts:583` | See the `search_text` row |
 | Cap payloads to the remaining budget, keep whole lines, structured exhaustion, no double-spend under parallel calls | done | Synchronous `reserve` in `src/context/budget.ts:42`; line-by-line fit in `read_range`; tests `concurrent reservations never spend more than the cap`, `duplicates and over-budget content are recorded but never charged or sent` | — |
-| Context rows: path/range, query, reason, cost, cumulative total, sent vs excluded, clickable source | done | `media/panel.js` `updateContextRows`; `src/extension.ts:146` | Search candidates cut by `limit` are not listed as rows; only the budget-reserved ones are |
+| Context rows: path/range, query, reason, cost, cumulative total, sent vs excluded, clickable source | done | `media/panel.js` `updateContextRows`; `src/extension.ts:146` | One exclusion row identifies the first omitted match and the number omitted at the result limit |
 | Acceptance test with two similar filenames and a forced-small budget, independent of Flask | done (added here) | Test `search ranks a definition above a similarly named file's call sites and plain text, then truncates at a small budget` | — |
 | Task B: three or more relevant files discovered, with one implementation, test and docs match visible | live | — | Real Task B run (see below) |
 
@@ -58,7 +60,7 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 | The visible Accept/Reject answers the matching gated call | done | `src/review/index.ts` `submit`/`decide`; `src/review/codelens.ts:30`; test `harness-style flow: request, queue, decide, apply` | — |
 | A rejected hunk is final; the model cannot silently resubmit it | done (fixed here) | `src/review/store.ts:261`; deny reasons in `src/trueforge/harness.ts` and `src/review/index.ts`; test `the exact change of a rejected hunk cannot be proposed again in the same run` | The identical change used to be accepted again after a rejection |
 | Batch apply: revalidate every target, apply none on conflict, one text-only `WorkspaceEdit`, check the result, undo across files, explicit save | done | `src/review/apply.ts:80`, `:97`, `:109`, `:130`; extension-host cases `two hunks…`, `three files…`, `manual edit blocks all files…`, `version-only change blocks Apply…` | — |
-| After Apply/Save, resume the TrueForge conversation with the applied and rejected files; label pre-apply checks as a baseline | missing (known limitation, deferred) | The run ends at `ready_to_apply` (`src/trueforge/harness.ts`), so no follow-up turn exists. `run_check`'s description says that an early run is only a baseline | Deferred on 20 November; see Known limitations |
+| Resume the session after Apply and Save | implemented / live verification pending | Save and verify, harness follow-up tests and extension-host save test | Capture the competition model running the check |
 | Cancellation: immediate inactive state, invalidated hunks, decisions refused, tools aborted, session cancelled and drained, Apply guarded and serialized | done | `src/trueforge/harness.ts:204`; `src/review/store.ts:388`, `:463`; `src/mcp/tools.ts:622`; tests `cancelling during streaming…`, `cancelling while paused…`, `cancel invalidates pending hunks…`, `serialize runs apply and cancel…`, host case `cancel blocks late decisions…` | — |
 | Model recovery: classification, reconnect, no fallback on cancel, backup once on auth, harness retries respected, fresh backup session, primary invalidated, switch announced, side-effect limit, single final error | done / live | `src/trueforge/fallback.ts:87`, `:108`; `test/fallback.test.cjs` (12 cases); host case `fallback invalidates the old review…` | Task C with a deliberately broken primary |
 
@@ -84,7 +86,7 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 | Primary auth failure, transient failure, backup failure, cancellation | done | `test/fallback.test.cjs` |
 | New session with a second configured model | live | Repeat Task A on the second model and record the outcome |
 | Fresh machine following the README only | live | Clean-clone rehearsal |
-| Build, typecheck, lint | partial | `npm run build` and `npm run compile` typecheck. No lint script exists; the team needs to decide whether to add ESLint |
+| Build, typecheck, lint | implemented | `npm run build`, `npm run compile`, `npm run lint` |
 
 ## §10 Packaging
 
@@ -97,16 +99,12 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 | Demo fixtures separate from extension code | done | `demo/` | — |
 | Video, PDF and portal links | missing (team deliverable) | — | Owner 4 |
 
-## Known limitations
+## Follow-up status
 
-- **No follow-up turn after Apply/Save** (spec §6). Deferred on 20 November 2026. Each run ends at `ready_to_apply`, so the agent never learns which hunks were applied or rejected. `run_check` cannot validate the applied edits within the same run, and any check the agent runs is pre-apply, which the tool description labels a baseline. Until this is built:
-  - run the checks yourself after Apply and Save, for example `pytest tests/test_cli.py -q` or `demo/check_task_b.sh`
-  - or start a new agent run that asks for a check
-  - the PDF should state this limitation
-
-  The fix is to post one more turn to the same TrueForge session after Apply/Save, listing applied and rejected files, then let the agent call `run_check`. It needs a live model to validate.
-- **Check profiles take no per-call arguments.** The agent picks a profile ID. Each profile's arguments are fixed in settings.
-- **No lint script.** Typechecking runs through `npm run compile`.
+- After Apply, **Save and verify** saves the reviewed files and requests a check in the original TrueForge session. The response identifies baseline and after-save checks. The extension-host suite covers saving and refusing a changed buffer. Session reuse and failure handling have automated coverage with a simulated model.
+- The agent panel groups changes by file and shows each hunk's status, diff and decisions.
+- The search ledger shows the first match omitted at the result limit and the total omitted. The check tool accepts a profile ID and optional arguments that must match its configured argument list.
+- Run `npm run lint`, `npm test` and `npm run test:host` for the repository checks.
 
 ## Needs a live model or recording to verify
 
@@ -115,4 +113,4 @@ Commands run on the branch: `npm ci`, `npm test` (120 pass, 0 fail; 88 on `main`
 3. A real deferred `run_check` discovery in the session, for B4 evidence.
 4. The `approve_hunk` race fix against a real TrueForge server. The unit test reproduces the ordering, but the timing on a live server is unobserved.
 5. Task A and Task C runs, a second model, and the clean-machine rehearsal.
-6. The post-apply follow-up turn, if it is built later (see Known limitations).
+6. The post-save follow-up with the competition model, including the actual check command and exit code.
