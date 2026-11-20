@@ -8,6 +8,7 @@ export interface Selection {
   endLine: number;
   text?: string;
   documentVersion?: number;
+  truncated?: boolean;
 }
 
 export interface Failure {
@@ -21,6 +22,7 @@ export interface Failure {
 export interface HarnessHooks {
   onState?(state: RunState): void;
   prepareInput?(runId: string, content: string, signal: AbortSignal, previousState?: unknown): Promise<string | PreparedInput>;
+  prepareSelection?(runId: string, selection: Selection): Selection;
   onDelta?(runId: string, text: string): void;
   onApproval?(runId: string, hunkId: string, toolCallId: string): void;
   onDecision?(runId: string, hunkId: string, allowed: boolean): void;
@@ -79,6 +81,20 @@ function isRunCheck(call: Api.ToolCall, connector: string): boolean {
     return target?.mcp_server === connector && target.tool_name === "run_check";
   } catch {
     return false;
+  }
+}
+
+function approvedHunkId(call: Api.ToolCall, connector: string): unknown {
+  try {
+    const args = JSON.parse(call.function.arguments);
+    if (call.toolInfo.type === "mcp") {
+      return call.toolInfo.serverName === connector && call.toolInfo.name === "approve_hunk" ? args?.hunkId : undefined;
+    }
+    if (call.toolInfo.name !== "call_tool" || args?.mcp_server !== connector || args.tool_name !== "approve_hunk") return undefined;
+    const input = typeof args.input === "string" ? JSON.parse(args.input) : args.input;
+    return input?.hunkId;
+  } catch {
+    return undefined;
   }
 }
 
@@ -146,10 +162,14 @@ export class Harness {
   // Resolves and budgets explicit context before opening a TrueForge session.
   private async prepareAndExecute(run: Run, instruction: string, selection?: Selection): Promise<RunState> {
     let prepared: string | PreparedInput;
+    let sentSelection = selection;
     try {
       prepared = this.hooks.prepareInput
         ? await this.hooks.prepareInput(run.state.runId, instruction, run.controller.signal)
         : instruction;
+      if (run.active && selection && this.hooks.prepareSelection) {
+        sentSelection = this.hooks.prepareSelection(run.state.runId, selection);
+      }
     } catch (error) {
       if (run.active) {
         const message = messageOf(error);
@@ -159,7 +179,7 @@ export class Harness {
     }
     if (!run.active) return { ...run.state };
     let content = typeof prepared === "string" ? prepared : prepared.content;
-    if (selection) content += "\n\nEditor selection (1-based lines):\n" + JSON.stringify(selection);
+    if (sentSelection) content += "\n\nEditor selection (1-based lines):\n" + JSON.stringify(sentSelection);
     return this.execute(run, content);
   }
 
@@ -167,7 +187,7 @@ export class Harness {
     return this.decide(hunkId, { status: "allow" });
   }
 
-  reject(hunkId: string, reason = "Rejected by the developer."): boolean {
+  reject(hunkId: string, reason = "Rejected by the developer. This decision is final; do not propose the same change again."): boolean {
     return this.decide(hunkId, { status: "deny", reason });
   }
 
@@ -396,10 +416,7 @@ export class Harness {
       run.pending.set(ref.id, { threadId, decision: { status: "allow" } });
       return;
     }
-    if (call && call.toolInfo.type === "mcp" && call.toolInfo.serverName === this.connector &&
-      call.toolInfo.name === "approve_hunk") {
-      try { hunkId = JSON.parse(call.function.arguments)?.hunkId; } catch {}
-    }
+    if (call) hunkId = approvedHunkId(call, this.connector);
     if (typeof hunkId !== "string" || !run.proposed.has(hunkId) || run.requested.has(hunkId)) {
       run.pending.set(ref.id, { threadId, decision: { status: "deny", reason: "No matching pending ForgeLens hunk in this run." } });
       return;

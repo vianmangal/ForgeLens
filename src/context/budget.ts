@@ -61,6 +61,7 @@ export class RunContextBudget {
       sentToModel: allowed,
       costTokens: allowed ? estimatedTokens : 0,
       cumulativeTokens: this.usedTokens,
+      limitTokens: this.limitTokens,
       ...(duplicate
         ? { exclusion: "duplicate" as const }
         : !allowed
@@ -87,6 +88,7 @@ export class RunContextBudget {
       sentToModel: false,
       costTokens: 0,
       cumulativeTokens: this.usedTokens,
+      limitTokens: this.limitTokens,
       exclusion: "over_budget"
     };
     this.rows.push(row);

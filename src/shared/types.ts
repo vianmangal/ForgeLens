@@ -23,7 +23,7 @@ export interface Hunk {
 
 export interface ContextRow {
   runId: RunId;
-  tool: "search_text" | "find_symbol" | "read_range" | "mention";
+  tool: "search_text" | "find_symbol" | "read_range" | "mention" | "selection";
   query: string;
   path: string;
   startLine: number;
@@ -32,6 +32,7 @@ export interface ContextRow {
   sentToModel: boolean;
   costTokens: number;
   cumulativeTokens: number;
+  limitTokens: number;
   exclusion?: "truncated" | "duplicate" | "over_budget";
 }
 

@@ -429,3 +429,44 @@ test("only the active run's announced ForgeLens MCP session owns its tools", asy
     previous = sessionId;
   }
 });
+
+test("approve_hunk reached through deferred tool discovery is gated like a preloaded call", async () => {
+  const waiting = deferred();
+  let submitted;
+  const wrapper = (id, server, input) => ({
+    id, type: "function", toolInfo: { type: "truefoundry-system", name: "call_tool" },
+    function: { name: "call_tool", arguments: JSON.stringify({ mcp_server: server, tool_name: "approve_hunk", input }) }
+  });
+  const { harness, observed } = fixture({
+    createTurnStream: async () => events(created(),
+      { ...base, toolCalls: [wrapper("d1", "forgelens", { hunkId: "h1" }), wrapper("d2", "forgelens", JSON.stringify({ hunkId: "h2" })),
+        wrapper("d3", "other", { hunkId: "h1" })] },
+      approval("d1", "d2", "d3"), paused),
+    subscribeToTurn: async () => events(done()),
+    createTurnEvents: async (_sid, _tid, { events }) => { submitted = events; }
+  }, { onState: state => { if (state.status === "awaiting_approval") waiting.resolve(); } });
+  const finish = harness.startRun("p/m", "Do it");
+  const id = harness.state.runId;
+  assert.ok(harness.registerProposed(id, "h1"));
+  assert.ok(harness.registerProposed(id, "h2"));
+  await waiting.promise;
+  assert.deepEqual(observed.approvals, [[id, "h1", "d1"], [id, "h2", "d2"]]);
+  assert.ok(harness.approve("h1"));
+  assert.ok(harness.reject("h2"));
+  assert.equal((await finish).status, "ready_to_apply");
+  assert.deepEqual(submitted.map(e => [e.toolCallId, e.approval.status]), [["d1", "allow"], ["d2", "deny"], ["d3", "deny"]]);
+  assert.match(submitted[1].approval.reason, /final; do not propose the same change again/);
+});
+
+test("the selection returned by prepareSelection is what the first turn sends", async () => {
+  const selection = { path: "a.ts", startLine: 3, endLine: 5, text: "one\ntwo\nthree\n" };
+  const seen = [];
+  const { harness, observed } = fixture({}, {
+    prepareSelection: (runId, value) => { seen.push([runId, value]); return { ...value, text: "one\n", truncated: true }; }
+  });
+  await harness.startRun("p/m", "Edit", selection);
+  assert.deepEqual(seen, [[observed.states[0].runId, selection]]);
+  const sent = observed.api.find(([kind]) => kind === "turn")[2].input[0].content;
+  assert.match(sent, /"text":"one\\n","truncated":true/);
+  assert.doesNotMatch(sent, /three/);
+});

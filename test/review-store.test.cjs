@@ -251,6 +251,23 @@ test("a rejected hunk no longer blocks a new proposal on the same lines, but a p
   assert.equal(store.hunksOfRun(other.runId).length, 2);
 });
 
+test("the exact change of a rejected hunk cannot be proposed again in the same run", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-s");
+  const snap = store.captureSnapshot(doc("file:///s.py", text));
+  const edit = (newText) => store.propose(run.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText });
+  const first = edit("b = 20");
+  store.decide(first.hunkIds[0], "rejected");
+  const repeat = edit("b = 20");
+  assert.equal(repeat.ok, false);
+  assert.match(repeat.error, /already rejected this exact change/);
+  const asRange = store.propose(run.runId, snap.snapshotId, { kind: "range", startLine: 3, endLine: 3, newText: "    b = 20\n" });
+  assert.equal(asRange.ok, false);
+  assert.equal(edit("b = 21").ok, true);
+  const other = store.createRun("agent", "t", "run-t");
+  assert.equal(store.propose(other.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 20" }).ok, true);
+});
+
 const anchorEdit = (store, runId, uri, newText) => {
   const snap = store.captureSnapshot(doc(uri, text));
   return store.propose(runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText });
@@ -347,4 +364,18 @@ test("conflict indicators require both the snapshot version and hash", () => {
   assert.equal(store.isConflicted(run.runId, uri), true);
   store.refreshConflicts(doc(uri.toString(), text, 1));
   assert.equal(store.isConflicted(run.runId, uri), false);
+});
+
+test("a queued decision remembers its direction until the harness records it", () => {
+  const store = new ReviewStore();
+  const run = store.createRun("agent", "t", "run-u");
+  const snap = store.captureSnapshot(doc("file:///u.py", text));
+  const [id] = store.propose(run.runId, snap.snapshotId, { kind: "anchor", oldText: "b = 2", newText: "b = 9" }).hunkIds;
+  store.markApprovalRequested(id, "call-1");
+  store.markQueued(id, "rejected");
+  assert.equal(store.isQueued(id), true);
+  assert.equal(store.queuedDecision(id), "rejected");
+  store.decide(id, "rejected");
+  assert.equal(store.isQueued(id), false);
+  assert.equal(store.queuedDecision(id), undefined);
 });

@@ -129,8 +129,8 @@
         },
         "forgelens.checkProfiles": {
           "type": "array",
-          "default": [],
-          "description": "Allowlisted Python check profiles selectable by run_check.",
+          "default": [{ "id": "pytest", "args": ["-m", "pytest", "-q"] }],
+          "description": "Allowlisted Python check profiles selectable by run_check. Each profile runs forgelens.pythonPath with its arguments in the workspace root. The default runs the whole pytest suite.",
           "items": {
             "type": "object",
             "required": ["id", "args"],

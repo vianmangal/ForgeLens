@@ -7,10 +7,15 @@ import { findSymbol } from "../context/symbols";
 import { searchText } from "../context/search";
 import type { ContextRow, SourceSnapshot } from "../shared/types";
 import type { ReviewApi } from "../review";
-import type { ProposalRequest } from "../review/hunks";
+import { hashText, type ProposalRequest } from "../review/hunks";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export type CurrentRunId = () => string | undefined;
+
+export interface CheckProfile {
+  id: string;
+  args: string[];
+}
 
 export interface ForgeLensToolContext {
   review: ReviewApi;
@@ -21,7 +26,12 @@ export interface ForgeLensToolContext {
 }
 
 const budgetsByRun = new Map<string, RunContextBudget>();
+const snapshotsByRun = new Map<string, Set<string>>();
 const encoder = new TextEncoder();
+export const DEFAULT_CONTEXT_BUDGET = 6000;
+export const MAX_READ_LINES = 300;
+const DECISION_WAIT_MS = 15_000;
+export const DEFAULT_CHECK_PROFILES: readonly CheckProfile[] = [{ id: "pytest", args: ["-m", "pytest", "-q"] }];
 const MAX_CHECK_OUTPUT_CHARS = 16_000;
 const MAX_CHECK_RUNTIME_MS = 120_000;
 const CHECK_KILL_GRACE_MS = 1_000;
@@ -32,9 +42,12 @@ export function getBudgetForRun(runId: string): RunContextBudget {
   let budget = budgetsByRun.get(runId);
 
   if (!budget) {
-    const limitTokens = vscode.workspace
+    const configured = vscode.workspace
       .getConfiguration("forgelens")
-      .get<number>("contextBudget", 6000);
+      .get<unknown>("contextBudget", DEFAULT_CONTEXT_BUDGET);
+    const limitTokens = typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+      ? configured
+      : DEFAULT_CONTEXT_BUDGET;
 
     budget = new RunContextBudget(runId, limitTokens);
     budgetsByRun.set(runId, budget);
@@ -46,6 +59,60 @@ export function getBudgetForRun(runId: string): RunContextBudget {
 // Drops the run's ledger once ForgeLens no longer needs its retrieval history.
 export function clearBudgetForRun(runId: string): void {
   budgetsByRun.delete(runId);
+  snapshotsByRun.delete(runId);
+}
+
+function issueSnapshot(runId: string, snapshotId: string): void {
+  let issued = snapshotsByRun.get(runId);
+  if (!issued) {
+    issued = new Set();
+    snapshotsByRun.set(runId, issued);
+  }
+  issued.add(snapshotId);
+}
+
+function waitForDecision(context: ForgeLensToolContext, runId: string, hunkId: string, signal: AbortSignal): Promise<void> {
+  const settled = () => {
+    const hunk = context.review.store.getHunk(hunkId);
+    return !context.isRunActive(runId) || !hunk || (hunk.status !== "proposed" && hunk.status !== "approval_requested") ||
+      context.review.store.queuedDecision(hunkId) === "accepted";
+  };
+  if (settled() || signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer);
+      clearInterval(monitor);
+      subscription.dispose();
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const subscription = context.review.store.onDidChange(() => { if (settled()) finish(); });
+    const monitor = setInterval(() => { if (settled()) finish(); }, 250);
+    const timer = setTimeout(finish, DECISION_WAIT_MS);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+export function configuredCheckProfiles(): CheckProfile[] {
+  const configured = vscode.workspace
+    .getConfiguration("forgelens")
+    .get<unknown>("checkProfiles", DEFAULT_CHECK_PROFILES);
+  const entries: unknown[] = Array.isArray(configured) ? configured : [...DEFAULT_CHECK_PROFILES];
+  const profiles: CheckProfile[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null || !("id" in entry) || !("args" in entry)) continue;
+    const { id, args } = entry;
+    if (typeof id !== "string" || !id.trim() || !Array.isArray(args) || !args.every(arg => typeof arg === "string")) continue;
+    if (profiles.some(profile => profile.id === id)) continue;
+    profiles.push({ id, args: [...args] });
+  }
+  return profiles;
+}
+
+function profileList(profiles: CheckProfile[]): string {
+  return profiles.length
+    ? "Available profile IDs: " + profiles.map(profile => profile.id).join(", ") + "."
+    : "No check profiles are configured; set forgelens.checkProfiles to enable checks.";
 }
 
 function result(value: unknown, isError = false) {
@@ -115,11 +182,11 @@ export function registerSearchTextTool(
   server.registerTool(
     "search_text",
     {
-      description: "Search workspace text and return ranked, budgeted excerpts.",
+      description: "Search the workspace for a literal, case-insensitive query. Results are ranked definitions first, then whole-identifier matches, then plain text, and return one-line excerpts with 1-based line numbers. Ignored, dependency and generated folders are skipped. Each excerpt is charged to the run's context budget.",
       inputSchema: {
-        query: z.string().min(1).max(256),
-        scope: z.string().optional(),
-        limit: z.number().int().min(1).max(30).optional()
+        query: z.string().min(1).max(256).describe("Literal text or identifier to find."),
+        scope: z.string().max(1024).optional().describe("Optional workspace-relative folder to search, for example a source or test folder."),
+        limit: z.number().int().min(1).max(30).optional().describe("Maximum number of excerpts to return; defaults to 10.")
       },
       annotations: { readOnlyHint: true }
     },
@@ -147,10 +214,10 @@ export function registerFindSymbolTool(
   server.registerTool(
     "find_symbol",
     {
-      description: "Find workspace symbol definitions and return bounded evidence.",
+      description: "Find definitions of a function, class, method or variable by name. Uses the editor's symbol provider and falls back to a bounded lexical search. Returns path, 1-based line range and evidence for each candidate.",
       inputSchema: {
-        name: z.string().min(1).max(256),
-        pathHint: z.string().max(512).optional()
+        name: z.string().min(1).max(256).describe("Identifier to look up."),
+        pathHint: z.string().max(512).optional().describe("Optional workspace-relative path fragment that the definition's file must contain.")
       },
       annotations: { readOnlyHint: true }
     },
@@ -178,11 +245,11 @@ export function registerReadRangeTool(
   server.registerTool(
     "read_range",
     {
-      description: "Read a bounded workspace line range and return its source snapshot.",
+      description: `Read numbered lines from a workspace file, including unsaved editor changes. Lines are 1-based and inclusive. Ranges past the end of the file or longer than ${MAX_READ_LINES} lines are shortened, and the remaining context budget can shorten them further; truncated reports this. Returns the snapshotId that propose_edit needs for this file.`,
       inputSchema: {
-        path: z.string().min(1).max(1024),
-        startLine: z.number().int().min(1),
-        endLine: z.number().int().min(1)
+        path: z.string().min(1).max(1024).describe("Workspace-relative file path as returned by search_text or find_symbol."),
+        startLine: z.number().int().min(1).describe("First line to read, 1-based."),
+        endLine: z.number().int().min(1).describe("Last line to read, 1-based and inclusive.")
       },
       annotations: { readOnlyHint: true }
     },
@@ -191,17 +258,19 @@ export function registerReadRangeTool(
       if (!runId) return result({ status: "no_active_run", message: "There is no active ForgeLens run." }, true);
 
       try {
-        if (endLine < startLine || endLine - startLine > 299) {
-          throw new Error("Choose a valid range of at most 300 lines.");
+        if (endLine < startLine) {
+          throw new Error("endLine must be greater than or equal to startLine.");
         }
 
         const document = await resolveWorkspaceDocument(path);
         if (currentRun(context) !== runId) {
           return result({ status: "cancelled", message: "The run ended while the file was opening." });
         }
-        if (endLine > document.lineCount) {
+        if (startLine > document.lineCount) {
           throw new Error(`Requested lines ${startLine}-${endLine}, but the file has ${document.lineCount} lines.`);
         }
+        const lastLine = Math.min(endLine, document.lineCount, startLine + MAX_READ_LINES - 1);
+        const totalLines = document.lineCount;
 
         const snapshotRecord = context.review.store.captureSnapshot(document);
         const snapshot: SourceSnapshot = {
@@ -210,12 +279,13 @@ export function registerReadRangeTool(
           documentVersion: snapshotRecord.documentVersion,
           contentHash: snapshotRecord.contentHash
         };
+        issueSnapshot(runId, snapshot.snapshotId);
         const budget = getBudgetForRun(runId);
         const sourceLines = document.getText().split(/\r?\n/);
         const selected: string[] = [];
         let truncated = false;
 
-        for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+        for (let lineNumber = startLine; lineNumber <= lastLine; lineNumber += 1) {
           const numberedLine = `${lineNumber}: ${sourceLines[lineNumber - 1] ?? ""}`;
           const candidateText = [...selected, numberedLine].join("\n");
           const candidateEndLine = startLine + selected.length;
@@ -223,6 +293,7 @@ export function registerReadRangeTool(
             path: snapshot.path,
             startLine,
             endLine: candidateEndLine,
+            totalLines,
             text: candidateText,
             snapshot,
             snapshotId: snapshot.snapshotId
@@ -240,6 +311,7 @@ export function registerReadRangeTool(
           path: snapshot.path,
           startLine,
           endLine: actualEndLine,
+          totalLines,
           text,
           snapshot,
           snapshotId: snapshot.snapshotId
@@ -303,6 +375,7 @@ export function registerReadRangeTool(
           path: snapshot.path,
           startLine,
           endLine: actualEndLine,
+          totalLines,
           text,
           snapshot,
           snapshotId: snapshot.snapshotId,
@@ -325,13 +398,13 @@ export function registerProposeEditTool(
   server.registerTool(
     "propose_edit",
     {
-      description: "Propose a snapshot-validated edit for human review; never writes files.",
+      description: "Stage an edit to one file for the developer's review; it never writes files. Pass the snapshotId that read_range returned for the file in this run and either startLine/endLine (1-based, inclusive; use endLine = startLine - 1 to insert before startLine) or a unique oldText copied exactly from the file. Returns the hunkIds to pass to approve_hunk. Stale, ambiguous or overlapping edits are rejected with an explanation.",
       inputSchema: {
-        snapshotId: z.string().min(1).max(128),
-        startLine: z.number().int().min(1).optional(),
-        endLine: z.number().int().min(0).optional(),
-        oldText: z.string().min(1).max(6_000).optional(),
-        newText: z.string().max(6_000)
+        snapshotId: z.string().min(1).max(128).describe("snapshotId returned by read_range for this file in this run."),
+        startLine: z.number().int().min(1).optional().describe("First line to replace, 1-based. Use with endLine instead of oldText."),
+        endLine: z.number().int().min(0).optional().describe("Last line to replace, 1-based and inclusive. Use startLine - 1 to insert without replacing."),
+        oldText: z.string().min(1).max(6_000).optional().describe("Exact existing text that occurs once in the file. Use instead of startLine/endLine."),
+        newText: z.string().max(6_000).describe("Replacement text for the range or the oldText anchor.")
       }
     },
     async ({ snapshotId, startLine, endLine, oldText, newText }) => {
@@ -342,6 +415,23 @@ export function registerProposeEditTool(
       const isAnchor = startLine === undefined && endLine === undefined && oldText !== undefined;
       if (!isRange && !isAnchor) {
         return result({ status: "error", message: "Provide either startLine/endLine or oldText, but not both." }, true);
+      }
+
+      if (!snapshotsByRun.get(runId)?.has(snapshotId)) {
+        return result({ status: "error", message: "This snapshotId was not returned by read_range in the current run. Call read_range on the file and use the snapshotId it returns." }, true);
+      }
+      const snapshot = context.review.store.getSnapshot(snapshotId);
+      if (snapshot) {
+        let current: vscode.TextDocument;
+        try {
+          current = await vscode.workspace.openTextDocument(snapshot.uri);
+        } catch {
+          return result({ status: "error", message: `${snapshot.path} can no longer be opened. Search for the file again.` }, true);
+        }
+        if (currentRun(context) !== runId) return result({ status: "cancelled", message: "The run ended before the edit was staged." });
+        if (current.version !== snapshot.documentVersion || hashText(current.getText()) !== snapshot.contentHash) {
+          return result({ status: "error", message: `${snapshot.path} changed after this snapshot was read. Call read_range again and propose against the new snapshotId.` }, true);
+        }
       }
 
       const request: ProposalRequest = isRange
@@ -370,22 +460,32 @@ export function registerApproveHunkTool(
   server.registerTool(
     "approve_hunk",
     {
-      description: "Return the human review decision for a hunk owned by the current run.",
-      inputSchema: { hunkId: z.string().min(1).max(128) }
+      description: "Ask the developer to accept or reject one hunk returned by propose_edit. Call it exactly once per hunkId and wait for the result. A rejection is final for that change. Accepted hunks are applied by the developer in the editor.",
+      inputSchema: { hunkId: z.string().min(1).max(128).describe("One hunkId returned by propose_edit in this run.") }
     },
-    async ({ hunkId }) => {
+    async ({ hunkId }, extra) => {
       const runId = currentRun(context);
       if (!runId) return result({ status: "no_active_run", message: "There is no active ForgeLens run." }, true);
 
-      const hunk = context.review.store.getHunk(hunkId);
-      if (!hunk || hunk.runId !== runId) {
+      const owned = context.review.store.getHunk(hunkId);
+      if (!owned || owned.runId !== runId) {
         return result({ status: "error", message: "This hunk does not belong to the current run." }, true);
       }
-      if (hunk.status !== "accepted" && hunk.status !== "rejected") {
-        return result({ status: "pending", message: "The human review decision is not complete yet." });
+      await waitForDecision(context, runId, hunkId, extra.signal);
+      const hunk = context.review.store.getHunk(hunkId);
+      if (!hunk || currentRun(context) !== runId || hunk.status === "invalidated") {
+        return result({ status: "cancelled", hunkId, message: "The run ended before this hunk was decided." });
       }
-
-      return result({ status: hunk.status, hunkId });
+      if (hunk.status === "accepted" || (hunk.status === "approval_requested" && context.review.store.queuedDecision(hunkId) === "accepted")) {
+        return result({ status: "accepted", hunkId, message: "The developer accepted this hunk. It is applied together with the other accepted hunks when the developer chooses Apply." });
+      }
+      if (hunk.status === "rejected") {
+        return result({ status: "rejected", hunkId, message: "The developer rejected this hunk. The decision is final; do not propose the same change again." });
+      }
+      if (hunk.status !== "proposed" && hunk.status !== "approval_requested") {
+        return result({ status: hunk.status, hunkId });
+      }
+      return result({ status: "pending", hunkId, message: "The developer has not decided yet. Do not call approve_hunk again for this hunk." });
     }
   );
 }
@@ -395,11 +495,12 @@ export function registerRunCheckTool(
   server: McpServer,
   context: ForgeLensToolContext
 ): void {
+  const available = profileList(configuredCheckProfiles());
   server.registerTool(
     "run_check",
     {
-      description: "Run one configured Python check profile in the workspace.",
-      inputSchema: { checkId: z.string().min(1).max(128) }
+      description: "Run one check profile configured by the developer, such as a test suite, in the workspace root with its configured Python executable and arguments. Returns the command, working directory, exit code and bounded stdout/stderr. Run it only after the developer has applied and saved the accepted edits; an earlier run is only a baseline. " + available,
+      inputSchema: { checkId: z.string().min(1).max(128).describe("ID of a configured check profile. " + available) }
     },
     async ({ checkId }, extra) => {
       const runId = currentRun(context);
@@ -411,22 +512,19 @@ export function registerRunCheckTool(
         return result({ status: "error", message: "Open one trusted workspace folder before running checks." }, true);
       }
 
-      const profiles = vscode.workspace.getConfiguration("forgelens").get<unknown[]>("checkProfiles", []);
-      const profile = profiles.find(value =>
-        typeof value === "object" &&
-        value !== null &&
-        "id" in value &&
-        value.id === checkId
-      ) as { id: string; args?: unknown } | undefined;
-      if (!profile || !Array.isArray(profile.args) || !profile.args.every(arg => typeof arg === "string")) {
-        return result({ status: "error", message: "Unknown check profile or invalid profile arguments." }, true);
+      const profiles = configuredCheckProfiles();
+      const profile = profiles.find(value => value.id === checkId);
+      if (!profile) {
+        return result({ status: "error", message: `Unknown check profile "${checkId}". ${profileList(profiles)}` }, true);
       }
 
       const pythonPath = vscode.workspace.getConfiguration("forgelens").get<string>("pythonPath", "python").trim();
       if (!pythonPath) return result({ status: "error", message: "Set forgelens.pythonPath to the selected Python executable." }, true);
 
+      const cwd = folders[0].uri.fsPath;
+      const command = [pythonPath, ...profile.args];
       const child = spawn(pythonPath, profile.args, {
-        cwd: folders[0].uri.fsPath,
+        cwd,
         shell: false,
         windowsHide: true,
         detached: platform !== "win32",
@@ -535,6 +633,8 @@ export function registerRunCheckTool(
       return result({
         status: timedOut ? "timed_out" : cancelled ? "cancelled" : outcome.error ? "error" : "completed",
         checkId,
+        command,
+        cwd,
         exitCode: outcome.exitCode,
         signal: outcome.processSignal,
         stdout,

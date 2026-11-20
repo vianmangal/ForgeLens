@@ -1,0 +1,6 @@
+{
+  "forgelens.pythonPath": "<absolute path to the Flask checkout>/.venv/bin/python",
+  "forgelens.checkProfiles": [
+    { "id": "cli-tests", "args": ["-m", "pytest", "tests/test_cli.py", "-q"] }
+  ]
+}
