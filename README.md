@@ -97,7 +97,7 @@ Add the two models as **separate providers** in TrueForge (Settings → Model Pr
 
 For the backup, install Ollama, run `ollama pull qwen3:8b`, and keep Ollama running. Notes from the team's testing are in [`docs/models-and-resilience.md`](docs/models-and-resilience.md). The model name ForgeLens needs is the complete `provider/model` string shown in TrueForge after you save each provider.
 
-Neither model has yet been tested against the ForgeLens connector. Both passed TrueForge's built-in tool-call test on 17 Nov.
+Both models passed TrueForge's built-in tool-call test on 17 Nov. For the results with the ForgeLens connector, see the [model checks on 20 November](docs/models-and-resilience.md#forgelens-model-checks-on-20-november).
 
 ### 5. Launch the extension and register the connector
 

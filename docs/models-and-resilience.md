@@ -1,12 +1,12 @@
 # Models and resilience notes
 
-Owner: Person 5 (Models and resilience). Last updated: 17 Nov 2026.
+Owner: Person 5 (Models and resilience). Last updated: 20 Nov 2026.
 
 ## Model setup in TrueForge
 
 | Role | Provider entry | Model ID | Name in TrueForge | Where it runs | Cost |
 | --- | --- | --- | --- | --- | --- |
-| Primary | google-gemini (built-in) | gemini-3-1-flash-lite | gemini-3-1-flash-lite | Google cloud, free tier | Free |
+| Primary | google-gemini (built-in) | gemini-3.1-flash-lite | gemini-3-1-flash-lite | Google cloud, free tier | Free |
 | Backup | ollama (custom provider) | qwen3:8b | qwen3-8b | Locally via Ollama | Free |
 
 Both passed a tool-call test using TrueForge's built-in connector on 17 Nov.
@@ -26,6 +26,26 @@ Keys are entered in TrueForge's Settings, never in this repo.
    - Context length: `32768`, Max output tokens: `8192`
    - Reasoning effort: ticked, set to `none`
 5. Ollama must be running (llama icon in the menu bar) whenever the backup is used.
+
+## ForgeLens model checks on 20 November
+
+The tests ran in disposable VS Code profiles on a 16 GB Mac with TrueForge 0.185.1. The team connector exposed all six ForgeLens tools. The test driver requested an edit, recorded the tool responses and review-store hunks, and checked that the real file stayed unchanged during review. The approvals in these checks were automated.
+
+| Model and task | Observed result |
+| --- | --- |
+| Qwen3 1.7B, isolated proof connector | The model read the file and requested approval for a real proposal. TrueForge recorded the test driver's denial. |
+| Qwen3 1.7B, team connector, one-line edit | The model read a fresh label from a two-line file. It submitted placeholder IDs and incompatible edit arguments. No reviewable hunk appeared. |
+| Qwen3 1.7B, same edit with sequential instructions | When asked to wait for each result, use the returned snapshot ID, and use only a line-range edit, the model staged the correct replacement, received approval and reported the fresh label. |
+| Qwen3 1.7B, exact Task A prompt on the pinned function | It read the selection and attempted edits, but produced no reviewable hunk. |
+| Qwen3 8B, team connector, ordinary one-line edit | It read the fresh label, staged the correct replacement, received approval through the editor command, and returned the label. The file stayed unchanged before Apply. |
+| Qwen3 8B, exact Task A prompt and selection on Flask `22d92470` | It explained the desired code change in chat. The session contained zero tool calls and the review store contained zero hunks. |
+| Qwen3 8B, same Task A prompt with session `reasoningEffort` set to `none` | It searched and read the source, then proposed the existing function text verbatim. The tool rejected the identical replacement. No hunk or approval request followed. |
+
+The unmodified checkout failed the four expected Task A checks (`off`, `OFF`, `n`, `N`) and passed the six controls. Neither 8B run produced an edit to apply and retest. The one-line pass establishes that 8B can use the connector. For demo sign-off, require a reviewable Task A diff, a passing `demo/check_task_a.sh` after Apply and Save, and a separate live fallback run.
+
+To repeat the small check, create `sample.txt` with a fresh `label=<random value>` on line 1 and `state=waiting` on line 2. Ask the agent to read the two lines, change only line 2 to `state=ready`, request approval, and report the label. Inspect the actual hunk and the approval event in TrueForge. A completed turn alone is insufficient evidence of a successful edit.
+
+The local TrueForge instance had no configured Gemini or Groq provider. Their current account quota and authenticated tool calls remain untested here. The installed TrueForge catalog maps the Google model ID `gemini-3.1-flash-lite` to the registered model name `gemini-3-1-flash-lite`. Google lists a free tier for this model. [Google Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
 ## Errors seen (newest first)
 
@@ -50,4 +70,5 @@ Keys are entered in TrueForge's Settings, never in this repo.
 
 ## Still to do
 
-- Test both models on the team's own MCP tools once the harness server is up.
+- Test Gemini with a credential configured in TrueForge and capture the provider response.
+- Rehearse Task A until the backup reliably produces a passing diff, then run Task B and the broken-primary Task C on the demo machine.
