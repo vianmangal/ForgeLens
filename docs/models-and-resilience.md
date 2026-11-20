@@ -6,11 +6,13 @@ Owner: Person 5 (Models and resilience). Last updated: 20 Nov 2026.
 
 | Role | Provider entry | Model ID | Name in TrueForge | Where it runs | Cost |
 | --- | --- | --- | --- | --- | --- |
-| Primary | google-gemini (built-in) | gemini-3.1-flash-lite | gemini-3-1-flash-lite | Google cloud, free tier | Free |
+| Primary | anthropic (built-in) | claude-haiku-5-5 | claude-haiku-5-5 | Anthropic cloud | Paid: $5 prepaid credit, auto-reload off; about $0.05–0.30 per Task B run |
 | Backup | ollama (custom provider) | qwen3:8b | qwen3-8b | Locally via Ollama | Free |
 
-Both passed a tool-call test using TrueForge's built-in connector on 17 Nov.
+VS Code settings: `forgelens.primaryModel` = `anthropic/claude-haiku-5-5`, `forgelens.backupModel` = `ollama/qwen3-8b`.
 Keys are entered in TrueForge's Settings, never in this repo.
+
+The primary was gemini-3-1-flash-lite until 20 Nov. It was replaced after the free models listed below could not complete Task B.
 
 ### Setting up the backup (each person who needs it)
 
@@ -27,7 +29,22 @@ Keys are entered in TrueForge's Settings, never in this repo.
    - Reasoning effort: ticked, set to `none`
 5. Ollama must be running (llama icon in the menu bar) whenever the backup is used.
 
-## ForgeLens model checks on 20 November
+## Final results on 20 November (claude-haiku-5-5 primary, qwen3:8b backup)
+
+Run on the `fix/spec-gaps` build against Flask `22d92470`, with real developer approvals in the editor.
+
+| Task | Result |
+| --- | --- |
+| A, inline edit | Two hunks (docstring and false-value set). After Apply and Save, `demo/check_task_a.sh` passed every case (`off`, `OFF`, `n`, `N`, `0`, `false`, `no`, empty and unset return False; `1` returns True). Undo Last Apply restored the original function. |
+| B, agent mode | Seven hunks across four files: `src/flask/cli.py`, `tests/test_cli.py`, `docs/cli.rst`, `docs/api.rst`. The new command sits after `routes_command` and is registered in `FlaskGroup`. `demo/check_task_b.sh` passed: masked JSON, the `timedelta` default serialised, `flask --help` lists `config`, 57 CLI tests passed and 3 skipped. |
+| C, model failure | Primary set to a custom provider at an unreachable endpoint (`http://127.0.0.1:65530/v1`). The run failed with a connection error and switched automatically to `ollama/qwen3-8b`. qwen3:8b described the change in text and proposed no hunk. `git status --short` was empty before and after. |
+
+Notes from these runs:
+
+- A one-line diagnostic edit (`label = "ready"`) produced plain quotes in the proposed diff, so the escaped quotes seen earlier came from gemini-3-1-flash-lite, not from the ForgeLens pipeline.
+- An endpoint on port 9 failed with `bad port` and was classified as a `tool` error, so no fallback happened. Browsers and Node block that port before any request is sent. Use an ordinary unused port to simulate an outage.
+
+## Earlier ForgeLens model checks on 20 November
 
 The tests ran in disposable VS Code profiles on a 16 GB Mac with TrueForge 0.185.1. The team connector exposed all six ForgeLens tools. The test driver requested an edit, recorded the tool responses and review-store hunks, and checked that the real file stayed unchanged during review. The approvals in these checks were automated.
 
@@ -51,6 +68,13 @@ The local TrueForge instance had no configured Gemini or Groq provider. Their cu
 
 | Date | Model | Code | Error text | Meaning |
 | --- | --- | --- | --- | --- |
+| 20 Nov | nvidia/nemotron-3-ultra-550b-a55b:free (OpenRouter) | none | You have reached iteration limit of 40 | Read files for 40 steps without proposing an edit. Free tier also allows about 50 requests a day. |
+| 20 Nov | glm-4.7-flash, glm-4.5-flash (Z.ai free) | 429 | Rate limited / service overloaded | Answers simple chats; agent runs fail mid-run and fall back. |
+| 20 Nov | gemini-3-8-flash | 429 | Quota exceeded: 5 requests per minute | Free tier too small for one agent run. |
+| 20 Nov | gemini-2.5-flash (custom endpoint) | 404 | Not found | Model retired. |
+| 20 Nov | openai/gpt-4.1 (GitHub Models) | none | Response stream ended without a finish reason | GitHub Models inference API retired. |
+| 19 Nov | gemini-3-1-flash-lite | none | Task B diff contained `\"\"\"` and placed `config_command` inside `routes_command` | Invalid edit. Rejected. |
+| 19 Nov | gemini-3-1-pro-preview | 429 | Not available on the free tier | Not usable without billing. |
 | 17 Nov | qwen3:8b (Ollama) | none | Passed: list tools, get tool info, call list_agents | Chosen as backup. Sometimes stops after a tool error and needs a nudge. |
 | 17 Nov | qwen3:1.7b (Ollama) | none | Called the wrong server name, then gave up | Too small for agent work. |
 | 17 Nov | qwen/qwen3.8-27b (Groq) | none | tool call validation failed: attempted to call tool 'call Tool' which was not in request.tools | Invents tool names. Not usable. |
@@ -68,7 +92,6 @@ The local TrueForge instance had no configured Gemini or Groq provider. Their cu
 - On a switch: discard the primary's pending hunks, start a new session on the backup with the same instruction and selection, show "Primary model failed → using backup".
 - Both models fail: one clear error, and the run ends.
 
-## Still to do
+## Known limitation
 
-- Test Gemini with a credential configured in TrueForge and capture the provider response.
-- Rehearse Task A until the backup reliably produces a passing diff, then run Task B and the broken-primary Task C on the demo machine.
+The backup qwen3:8b switches in automatically and leaves the workspace clean, but it does not produce a reviewable diff for Task A. A larger backup model would fix this; we kept a free local model because it works when every cloud provider is down.
